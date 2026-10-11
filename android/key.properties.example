@@ -1,0 +1,8 @@
+# Copy to android/key.properties (git-ignored) to sign Play Store builds.
+# Create the upload key once and back it up safely; losing it blocks app updates:
+#   keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+storePassword=CHANGE_ME
+keyPassword=CHANGE_ME
+keyAlias=upload
+# Path relative to android/app/ (or absolute)
+storeFile=../upload-keystore.jks

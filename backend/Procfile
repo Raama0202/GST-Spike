@@ -1,0 +1,2 @@
+release: alembic upgrade head && python -m app.seed
+web: gunicorn -c gunicorn.conf.py app.main:app

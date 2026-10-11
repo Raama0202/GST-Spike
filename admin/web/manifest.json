@@ -1,0 +1,35 @@
+{
+    "name": "GST Expense Admin",
+    "short_name": "GST Admin",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#F8F9FC",
+    "theme_color": "#0B5FFF",
+    "description": "Administration portal for GST Expense Scanner.",
+    "orientation": "any",
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "icons/Icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-maskable-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "maskable"
+        },
+        {
+            "src": "icons/Icon-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}

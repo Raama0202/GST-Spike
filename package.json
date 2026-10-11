@@ -1,24 +1,11 @@
 {
-  "name": "gst-saas-suite",
-  "version": "1.0.0",
+  "name": "gst-expense-scanner",
   "private": true,
-  "scripts": {
-    "dev": "concurrently \"npm:dev:api\" \"npm:dev:web\"",
-    "dev:api": "npm --workspace apps/api run start:dev",
-    "dev:web": "npm --workspace apps/web run dev",
-    "build": "npm --workspaces run build",
-    "lint": "npm --workspaces run lint",
-    "start:api": "npm --workspace apps/api run start",
-    "start:web": "npm --workspace apps/web run preview",
-    "seed": "npm --workspace apps/api run seed",
-    "e2e": "node apps/api/scripts/e2e-workflow.cjs"
-  },
   "workspaces": [
-    "apps/api",
-    "apps/web"
+    "web-admin"
   ],
-  "devDependencies": {
-    "concurrently": "^9.2.1",
-    "typescript": "^5.9.2"
+  "scripts": {
+    "build:web": "npm --workspace @gst-suite/web run build",
+    "dev:web": "npm --workspace @gst-suite/web run dev"
   }
 }

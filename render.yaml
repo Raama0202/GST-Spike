@@ -1,70 +1,61 @@
-# GST Spike — Render Blueprint
-# https://render.com/docs/blueprint-spec
+# Web console (super admin + company admin) as a free Render static site.
 #
-# After first deploy, set secrets in the Render dashboard (do not commit them).
+# Deliberately static-only so a push never creates paid resources. The API,
+# Postgres, Redis and cron live in render.full-stack.yaml.
+#
+# The console calls https://gst-expense-scanner.onrender.com/v1 (fallback in
+# web-admin/src/api/client.ts). That API's CORS_ORIGINS must include this
+# site's URL, e.g. https://gst-spike-web.onrender.com.
 
 services:
-  - type: web
-    name: gst-spike-api
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm install && npm --workspace @gst-suite/api run build
-    startCommand: npm --workspace @gst-suite/api run start
-    healthCheckPath: /api/health
-    disk:
-      name: gst-spike-uploads
-      mountPath: /var/data/uploads
-      sizeGB: 1
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: PORT
-        value: "4000"
-      - key: USE_MEMORY_MONGO
-        value: "false"
-      - key: AUTO_SEED_DEMO
-        value: "true"
-      - key: UPLOAD_DIR
-        value: /var/data/uploads
-      - key: GEMINI_MODEL
-        value: gemini-2.0-flash
-      - key: FAST2SMS_ROUTE
-        value: q
-      - key: RAZORPAY_PLAN_MONTHLY_PAISE
-        value: "99900"
-      - key: RAZORPAY_PLAN_YEARLY_PAISE
-        value: "999900"
-      - key: MONGODB_URI
-        sync: false
-      - key: JWT_SECRET
-        generateValue: true
-      - key: WEB_ORIGIN
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: FAST2SMS_API_KEY
-        sync: false
-      - key: RAZORPAY_KEY_ID
-        sync: false
-      - key: RAZORPAY_KEY_SECRET
-        sync: false
-
   - type: web
     name: gst-spike-web
     runtime: static
     plan: free
     region: singapore
-    buildCommand: npm install && npm --workspace @gst-suite/web run build
+    buildCommand: npm ci && npm --workspace @gst-suite/web run build
     staticPublishPath: apps/web/dist
+    pullRequestPreviewsEnabled: false
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://gst-expense-scanner.onrender.com/v1
     routes:
       - type: rewrite
         source: /*
         destination: /index.html
-    envVars:
-      - key: VITE_API_URL
-        sync: false
-      - key: VITE_ASSET_URL
-        sync: false
-      - key: VITE_ENABLE_DEMO_FALLBACK
-        value: "false"
+    headers:
+      - path: /*
+        name: Content-Security-Policy
+        value: >-
+          default-src 'self';
+          script-src 'self' https://checkout.razorpay.com;
+          style-src 'self' 'unsafe-inline';
+          img-src 'self' data: blob: https://gst-expense-scanner.onrender.com https://*.r2.cloudflarestorage.com https://*.razorpay.com;
+          connect-src 'self' https://gst-expense-scanner.onrender.com https://*.r2.cloudflarestorage.com https://api.razorpay.com https://lumberjack.razorpay.com;
+          frame-src https://api.razorpay.com https://checkout.razorpay.com;
+          font-src 'self' data:;
+          frame-ancestors 'none';
+          base-uri 'self';
+          form-action 'self';
+          object-src 'none'
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000; includeSubDomains
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(), microphone=(), geolocation=(), payment=(self "https://checkout.razorpay.com")
+      - path: /index.html
+        name: Cache-Control
+        value: no-cache
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable

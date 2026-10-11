@@ -1,0 +1,56 @@
+# Local full stack: Postgres + Redis + API (gunicorn). `docker compose up --build`
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: gst_expenses
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gst_expenses"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  migrate:
+    build: ./backend
+    command: sh -c "alembic upgrade head && python -m app.seed"
+    environment: &api-env
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/gst_expenses
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-replace-with-a-long-random-secret}
+      STORAGE_PATH: /data/uploads
+      OTP_DEV_FIXED: ${OTP_DEV_FIXED:-123456}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8080,http://127.0.0.1:8080}
+      ENV: ${ENV:-dev}
+      LOG_JSON: "false"
+      WEB_CONCURRENCY: "2"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: ./backend
+    environment: *api-env
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  uploads:

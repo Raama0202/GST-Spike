@@ -1,0 +1,54 @@
+name: gst_expense_scanner
+description: Production SaaS Android client for GST invoice capture, OCR, offline sync.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  flutter_riverpod: ^2.6.1
+  go_router: ^14.8.1
+
+  dio: ^5.8.0+1
+  pretty_dio_logger: ^1.4.0
+
+  hive_ce: ^2.10.1
+  hive_ce_flutter: ^2.2.0
+  flutter_secure_storage: ^9.2.4
+  path_provider: ^2.1.5
+  path: ^1.9.1
+
+  jwt_decoder: ^2.0.1
+  uuid: ^4.5.1
+  package_info_plus: ^8.3.0
+
+  image_picker: ^1.1.2
+  google_mlkit_document_scanner: ^0.3.0
+  google_mlkit_text_recognition: ^0.15.0
+  flutter_image_compress: ^2.4.0
+  image: ^4.5.4
+
+  workmanager: ^0.9.0+3
+
+  flutter_local_notifications: ^19.1.0
+
+  google_fonts: ^6.2.1
+  intl: ^0.20.2
+  equatable: ^2.0.7
+  collection: ^1.19.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/config/

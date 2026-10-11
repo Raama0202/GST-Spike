@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Release: HTTPS only. Debug builds use src/debug/res/xml/. -->
+<!-- ISRG Root X1 is bundled because Android 7.0 (API 24) does not ship it,
+     so Let's Encrypt certificates would otherwise fail TLS on those devices. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/isrg_root_x1" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

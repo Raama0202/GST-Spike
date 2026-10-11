@@ -1,14 +1,95 @@
-node_modules/
-dist/
-**/dist/
-uploads/
-**/uploads/
+# Miscellaneous
+*.class
 *.log
-.env
-.env.*
-!.env.example
-!.env*.example
+*.pyc
+*.swp
 .DS_Store
-apps/android/build/
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android signing / secrets
+android/key.properties
+**/*.jks
+**/*.keystore
+env/*.env
+!env/example.env
+.env
+backend/.env
+google-services.json
+
+# Large local artifacts (rebuild from source / docs)
+dist/apk/*.apk
+!**/*.md
+backend/*.db
+backend/uploads/
+backend/test_uploads*/
+admin/build/
+admin/.dart_tool/
+.github/workflows/
+
+# Web console (React)
+node_modules/
+web-admin/node_modules/
+web-admin/dist/
+apps/web/dist/
+
+# Python
+backend/.venv/
+.venv/
+__pycache__/
+.pytest_cache/
+backend/smoke_uploads/
+
+# Flutter / Android build output
+build/
+**/android/local.properties
+**/android/.gradle/
 *.apk
-.cursor/
+*.aab
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+
+
+# Android signing
+key.properties
+*.jks
+*.keystore
+
+# Local smoke-test databases
+backend/*.db*
+

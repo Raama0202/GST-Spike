@@ -1,0 +1,6 @@
+-r requirements.txt
+pytest==9.1.1
+pytest-asyncio==1.4.0
+moto==5.2.3
+fakeredis==2.39.0
+locust==2.46.7
