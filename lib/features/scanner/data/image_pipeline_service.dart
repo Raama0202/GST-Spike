@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter_image_compress/flutter_image_compress.dart';
@@ -49,8 +50,20 @@ class ImagePipelineService {
     final originalFile = await _imageStore.originalFile(localId);
     await source.copy(originalFile.path);
 
-    final enhancedBytes = await _enhance(originalFile.path);
-    final blurVariance = _laplacianVariance(enhancedBytes);
+    // Native downscale first: decoding a full 12MP photo in Dart is the
+    // slowest step of the pipeline.
+    final working = await FlutterImageCompress.compressWithFile(
+      originalFile.path,
+      minWidth: _workingShortEdge,
+      minHeight: _workingShortEdge,
+      quality: 95,
+      format: CompressFormat.jpeg,
+    );
+    final originalPath = originalFile.path;
+    final (enhancedBytes, blurVariance) = await Isolate.run(() {
+      final enhanced = _enhanceSync(originalPath, bytes: working);
+      return (enhanced.bytes, _laplacianVarianceOf(enhanced.image));
+    });
     final isBlurry = blurVariance < AppConstants.blurVarianceThreshold;
 
     final compressedFile = await _imageStore.compressedFile(localId);
@@ -84,31 +97,17 @@ class ImagePipelineService {
     return originalFile;
   }
 
-  Future<Uint8List> enhance(String imagePath) async {
-    return _enhance(imagePath);
+  Future<Uint8List> enhance(String imagePath) {
+    return Isolate.run(() => _enhanceSync(imagePath).bytes);
   }
 
   Future<bool> isBlurry(String imagePath) async {
-    final bytes = await File(imagePath).readAsBytes();
-    final variance = _laplacianVariance(bytes);
+    final variance = await Isolate.run(() {
+      final decoded = img.decodeImage(File(imagePath).readAsBytesSync());
+      if (decoded == null) return 0.0;
+      return _laplacianVarianceOf(_downscale(decoded));
+    });
     return variance < AppConstants.blurVarianceThreshold;
-  }
-
-  Future<Uint8List> _enhance(String imagePath) async {
-    final bytes = await File(imagePath).readAsBytes();
-    final decoded = img.decodeImage(bytes);
-    if (decoded == null) {
-      throw AppException(
-        StorageFailure('Unable to decode image at $imagePath'),
-      );
-    }
-
-    final enhanced = img.adjustColor(
-      decoded,
-      contrast: 1.12,
-      brightness: 1.02,
-    );
-    return Uint8List.fromList(img.encodeJpg(enhanced, quality: 92));
   }
 
   Future<void> _compressToTarget({
@@ -161,34 +160,73 @@ class ImagePipelineService {
     await File(outputPath).writeAsBytes(thumb, flush: true);
   }
 
-  double _laplacianVariance(Uint8List bytes) {
-    final decoded = img.decodeImage(bytes);
-    if (decoded == null) return 0;
+}
 
-    final gray = img.grayscale(decoded);
-    final width = gray.width;
-    final height = gray.height;
-    if (width < 3 || height < 3) return 0;
+/// Short edge of the working image; matches the 2048px floor the compressor
+/// already produced, so OCR and upload quality are unchanged.
+const _workingShortEdge = 2048;
 
-    final values = <double>[];
-    for (var y = 1; y < height - 1; y++) {
-      for (var x = 1; x < width - 1; x++) {
-        final center = gray.getPixel(x, y).r.toDouble();
-        final top = gray.getPixel(x, y - 1).r.toDouble();
-        final bottom = gray.getPixel(x, y + 1).r.toDouble();
-        final left = gray.getPixel(x - 1, y).r.toDouble();
-        final right = gray.getPixel(x + 1, y).r.toDouble();
-        values.add(-4 * center + top + bottom + left + right);
-      }
-    }
+img.Image _downscale(img.Image source) {
+  final shortEdge = source.width < source.height ? source.width : source.height;
+  if (shortEdge <= _workingShortEdge) return source;
+  final scale = _workingShortEdge / shortEdge;
+  return img.copyResize(
+    source,
+    width: (source.width * scale).round(),
+    height: (source.height * scale).round(),
+    interpolation: img.Interpolation.average,
+  );
+}
 
-    if (values.isEmpty) return 0;
-    final mean = values.reduce((a, b) => a + b) / values.length;
-    var sumSq = 0.0;
-    for (final value in values) {
-      final delta = value - mean;
-      sumSq += delta * delta;
-    }
-    return sumSq / values.length;
+/// Runs off the UI isolate: pure-Dart decode/encode of a 12MP photo takes
+/// several seconds.
+({Uint8List bytes, img.Image image}) _enhanceSync(
+  String imagePath, {
+  Uint8List? bytes,
+}) {
+  final decoded =
+      img.decodeImage(bytes ?? File(imagePath).readAsBytesSync());
+  if (decoded == null) {
+    throw AppException(
+      StorageFailure('Unable to decode image at $imagePath'),
+    );
   }
+
+  final enhanced = img.adjustColor(
+    _downscale(decoded),
+    contrast: 1.12,
+    brightness: 1.02,
+  );
+  return (
+    bytes: Uint8List.fromList(img.encodeJpg(enhanced, quality: 92)),
+    image: enhanced,
+  );
+}
+
+double _laplacianVarianceOf(img.Image image) {
+  final width = image.width;
+  final height = image.height;
+  if (width < 3 || height < 3) return 0;
+
+  final gray = img.grayscale(image.clone()).convert(numChannels: 1);
+  final px = gray.getBytes();
+
+  var sum = 0.0;
+  var sumSq = 0.0;
+  var count = 0;
+  for (var y = 1; y < height - 1; y++) {
+    final row = y * width;
+    for (var x = 1; x < width - 1; x++) {
+      final i = row + x;
+      final value = (px[i - width] + px[i + width] + px[i - 1] + px[i + 1] -
+              4 * px[i])
+          .toDouble();
+      sum += value;
+      sumSq += value * value;
+      count++;
+    }
+  }
+  if (count == 0) return 0;
+  final mean = sum / count;
+  return sumSq / count - mean * mean;
 }

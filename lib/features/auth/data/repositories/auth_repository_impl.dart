@@ -64,10 +64,16 @@ class AuthRepositoryImpl implements AuthRepository {
         );
       }
 
-      await refreshSession();
-
       var employee = await _local.readSession();
       var tokens = await _local.readTokens();
+
+      // A cached session opens offline and instantly; an expired access token
+      // is refreshed by the ApiClient's 401 interceptor on the first call.
+      if (employee == null || tokens == null) {
+        await refreshSession();
+        employee = await _local.readSession();
+        tokens = await _local.readTokens();
+      }
 
       if (employee == null || tokens == null) {
         employee = await _remote.fetchMe();
