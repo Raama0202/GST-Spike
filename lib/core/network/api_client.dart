@@ -10,28 +10,43 @@ import '../config/server_config.dart';
 import '../constants/app_constants.dart';
 import '../constants/env_config.dart';
 import '../errors/exceptions.dart';
+import '../errors/failures.dart';
 import '../security/secure_storage_service.dart';
 
 typedef TokenRefresher = Future<bool> Function();
+
+/// Called with the server's machine code when the company is suspended or its
+/// subscription lapsed (403 `COMPANY_SUSPENDED` / `SUBSCRIPTION_EXPIRED`).
+typedef AccountBlockedHandler = void Function(String code);
 
 /// Production Dio client with JWT refresh, tenant header, and optional pinning.
 class ApiClient {
   ApiClient({
     required SecureStorageService secureStorage,
     required TokenRefresher onRefreshToken,
+    AccountBlockedHandler? onAccountBlocked,
     Dio? dio,
   })  : _secureStorage = secureStorage,
         _onRefreshToken = onRefreshToken,
+        _onAccountBlocked = onAccountBlocked,
         _dio = dio ?? Dio() {
     _configure();
   }
 
   final SecureStorageService _secureStorage;
   final TokenRefresher _onRefreshToken;
+  final AccountBlockedHandler? _onAccountBlocked;
   final Dio _dio;
-  bool _refreshing = false;
+  Future<bool>? _refreshInFlight;
 
   Dio get dio => _dio;
+
+  /// Concurrent 401s share a single refresh call; refresh tokens rotate, so
+  /// a second parallel refresh would be rejected by the server.
+  Future<bool> _refreshOnce() {
+    return _refreshInFlight ??=
+        _onRefreshToken().whenComplete(() => _refreshInFlight = null);
+  }
 
   /// Repoints an existing client after the endpoint is changed at runtime.
   void updateBaseUrl(String baseUrl) => _dio.options.baseUrl = baseUrl;
@@ -67,30 +82,46 @@ class ApiClient {
           handler.next(options);
         },
         onError: (error, handler) async {
-          if (error.response?.statusCode != 401) {
+          final status = error.response?.statusCode;
+          if (status == 403) {
+            final data = error.response?.data;
+            final code = data is Map ? data['code'] : null;
+            if (code is String && AccountBlockCodes.contains(code)) {
+              _onAccountBlocked?.call(code);
+            }
+            return handler.next(error);
+          }
+          if (status != 401) {
             return handler.next(error);
           }
           if (error.requestOptions.path.contains(ApiEndpoints.refreshToken)) {
             return handler.next(error);
           }
-          if (_refreshing) {
+          if (error.requestOptions.extra['_authRetried'] == true) {
             return handler.next(error);
           }
-          _refreshing = true;
           try {
-            final ok = await _onRefreshToken();
+            final ok = await _refreshOnce();
             if (!ok) {
               return handler.next(error);
             }
             final token = await _secureStorage.accessToken;
             final opts = error.requestOptions;
-            opts.headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
-            final response = await _dio.fetch<dynamic>(opts);
+            final data = opts.data;
+            // A multipart body is a one-shot stream; re-sending the consumed
+            // FormData fails, so retry with a fresh copy.
+            final retry = opts.copyWith(
+              data: data is FormData ? data.clone() : data,
+              headers: {
+                ...opts.headers,
+                HttpHeaders.authorizationHeader: 'Bearer $token',
+              },
+              extra: {...opts.extra, '_authRetried': true},
+            );
+            final response = await _dio.fetch<dynamic>(retry);
             return handler.resolve(response);
           } catch (_) {
             return handler.next(error);
-          } finally {
-            _refreshing = false;
           }
         },
       ),
@@ -160,8 +191,8 @@ class ApiClient {
     return _guard(() => _dio.put<T>(path, data: data, options: options));
   }
 
-  Future<Response<T>> delete<T>(String path, {Object? data}) {
-    return _guard(() => _dio.delete<T>(path, data: data));
+  Future<Response<T>> delete<T>(String path, {Object? data, Options? options}) {
+    return _guard(() => _dio.delete<T>(path, data: data, options: options));
   }
 
   Future<Response<T>> uploadMultipart<T>(

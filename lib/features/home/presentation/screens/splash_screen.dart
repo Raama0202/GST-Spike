@@ -1,55 +1,12 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import 'package:gst_expense_scanner/core/constants/app_constants.dart';
-import 'package:gst_expense_scanner/core/services/notification_service.dart';
 import 'package:gst_expense_scanner/core/theme/glass.dart';
-import 'package:gst_expense_scanner/features/auth/presentation/providers/auth_providers.dart';
-import 'package:gst_expense_scanner/features/company_config/presentation/company_config_providers.dart';
-import 'package:gst_expense_scanner/features/sync/presentation/sync_providers.dart';
 
-class SplashScreen extends ConsumerStatefulWidget {
+/// Shown only while bootstrap's session restore is still running; the router
+/// leaves this screen as soon as the auth state settles.
+class SplashScreen extends StatelessWidget {
   const SplashScreen({super.key});
-
-  @override
-  ConsumerState<SplashScreen> createState() => _SplashScreenState();
-}
-
-class _SplashScreenState extends ConsumerState<SplashScreen> {
-  @override
-  void initState() {
-    super.initState();
-    _bootstrap();
-  }
-
-  Future<void> _bootstrap() async {
-    await ref.read(companyConfigStateProvider.notifier).loadCached();
-
-    final auth = ref.read(authStateProvider);
-    if (auth is! AuthAuthenticated) {
-      await ref.read(authStateProvider.notifier).restore();
-    }
-
-    if (!mounted) return;
-
-    final restored = ref.read(authStateProvider);
-    if (restored is AuthAuthenticated) {
-      await ref.read(syncStatusProvider.notifier).startEngine();
-    }
-
-    if (!mounted) return;
-
-    final finalAuth = ref.read(authStateProvider);
-    if (finalAuth is AuthAuthenticated) {
-      context.go('/home');
-      unawaited(NotificationService.instance.requestPermission());
-    } else {
-      context.go('/login');
-    }
-  }
 
   @override
   Widget build(BuildContext context) {

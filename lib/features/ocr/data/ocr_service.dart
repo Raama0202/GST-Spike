@@ -5,6 +5,7 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 import '../../../core/errors/exceptions.dart';
 import '../../../core/errors/failures.dart';
 import '../../../core/network/api_client.dart';
+import '../../../shared/models/company_identity.dart';
 import 'ai_invoice_extract_remote_datasource.dart';
 import 'gst_invoice_parser.dart';
 import 'ocr_result.dart';
@@ -37,7 +38,12 @@ class OcrService {
   final bool _ownsRecognizer;
   bool _closed = false;
 
-  Future<OcrRunResult> runOcr(String imagePath) async {
+  /// [identity] keeps the scanning company out of the vendor field when the
+  /// bill is read on-device (the API applies the same rule server-side).
+  Future<OcrRunResult> runOcr(
+    String imagePath, {
+    CompanyIdentity? identity,
+  }) async {
     if (_closed) {
       throw AppException(
         const OcrFailure('OCR recognizer has been closed.'),
@@ -61,10 +67,13 @@ class OcrService {
       }
     }
 
-    return _runOnDevice(imagePath);
+    return _runOnDevice(imagePath, identity);
   }
 
-  Future<OcrRunResult> _runOnDevice(String imagePath) async {
+  Future<OcrRunResult> _runOnDevice(
+    String imagePath,
+    CompanyIdentity? identity,
+  ) async {
     try {
       final inputImage = InputImage.fromFilePath(imagePath);
       final recognizedText = await _recognizer.processImage(inputImage);
@@ -75,7 +84,7 @@ class OcrService {
         );
       }
 
-      final parsed = _parser.parse(recognizedText);
+      final parsed = _parser.parse(recognizedText, identity: identity);
       return OcrRunResult(
         data: parsed.data,
         confidence: parsed.confidence,

@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:gst_expense_scanner/core/config/server_config.dart';
 import 'package:gst_expense_scanner/core/constants/app_constants.dart';
 import 'package:gst_expense_scanner/core/theme/glass.dart';
+import 'package:gst_expense_scanner/core/utils/mobile_number.dart';
 import 'package:gst_expense_scanner/features/auth/presentation/providers/auth_providers.dart';
 import 'package:gst_expense_scanner/features/settings/presentation/server_endpoint_dialog.dart';
 
@@ -28,38 +29,34 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.dispose();
   }
 
-  String? _validateMobile(String? value) {
-    final digits = (value ?? '').replaceAll(RegExp(r'\D'), '');
-    if (digits.length != 10) {
-      return 'Enter a valid 10-digit Indian mobile number';
-    }
-    if (!RegExp(r'^[6-9]\d{9}$').hasMatch(digits)) {
-      return 'Mobile number must start with 6, 7, 8, or 9';
-    }
-    return null;
-  }
-
   Future<void> _sendOtp() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (_submitting || !_formKey.currentState!.validate()) return;
 
-    final mobile = _mobileController.text.replaceAll(RegExp(r'\D'), '');
+    final mobile = IndianMobile.normalize(_mobileController.text);
+    if (mobile == null) return;
     setState(() => _submitting = true);
 
-    await ref.read(authStateProvider.notifier).sendOtp(mobile);
+    final delivery = await ref.read(authStateProvider.notifier).sendOtp(mobile);
 
     if (!mounted) return;
     setState(() => _submitting = false);
 
     final authState = ref.read(authStateProvider);
-    if (authState is AuthErrorState) {
-      _showMessage(authState.message);
-      ref.read(authStateProvider.notifier).clearError();
+    if (delivery == null || authState is AuthErrorState) {
+      if (authState is AuthErrorState) {
+        _showMessage(authState.message);
+        ref.read(authStateProvider.notifier).clearError();
+      }
       return;
     }
 
     context.push(
       '/otp',
-      extra: {'mobile': mobile, 'rememberLogin': _rememberLogin},
+      extra: {
+        'mobile': mobile,
+        'rememberLogin': _rememberLogin,
+        'delivery': delivery,
+      },
     );
   }
 
@@ -109,6 +106,28 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       ),
                     ),
                     const SizedBox(height: 32),
+                    if (authState is AuthErrorState && !_submitting) ...[
+                      GlassCard(
+                        tint: Brand.danger,
+                        padding: const EdgeInsets.all(14),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.block_rounded,
+                              color: Brand.danger,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                authState.message,
+                                style: theme.textTheme.bodyMedium,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                     GlassCard(
                       blur: true,
                       padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
@@ -126,9 +145,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             controller: _mobileController,
                             keyboardType: TextInputType.phone,
                             textInputAction: TextInputAction.done,
+                            autofillHints: const [
+                              AutofillHints.telephoneNumber,
+                            ],
                             inputFormatters: [
-                              FilteringTextInputFormatter.digitsOnly,
-                              LengthLimitingTextInputFormatter(10),
+                              // Allows pasted "+91 98765-43210" style input;
+                              // IndianMobile strips the country code.
+                              FilteringTextInputFormatter.allow(
+                                RegExp(r'[0-9+\-\s()]'),
+                              ),
+                              LengthLimitingTextInputFormatter(17),
                             ],
                             decoration: const InputDecoration(
                               labelText: 'Mobile number',
@@ -136,7 +162,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               prefixText: '+91 ',
                               hintText: '9876543210',
                             ),
-                            validator: _validateMobile,
+                            validator: IndianMobile.validate,
                             onFieldSubmitted: (_) => _sendOtp(),
                           ),
                           const SizedBox(height: 16),

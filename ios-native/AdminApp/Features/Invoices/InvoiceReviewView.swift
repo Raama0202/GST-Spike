@@ -117,7 +117,7 @@ struct InvoiceReviewView: View {
                     let changed = (edited ?? .null) != (ocr ?? .null) && ocr != nil && !(ocr?.isNull ?? true)
                     VStack(alignment: .trailing, spacing: 2) {
                         DetailRow(
-                            label: key.humanizedKey,
+                            label: label(for: key),
                             value: format(key, edited ?? ocr ?? .null),
                             valueColor: changed ? Brand.orange : .primary
                         )
@@ -195,6 +195,10 @@ struct InvoiceReviewView: View {
         case .reject: return "rejected"
         case .return: return "returned"
         }
+    }
+
+    private func label(for key: String) -> String {
+        ["netAmount", "totalAmount"].contains(key) ? "Invoice value" : key.humanizedKey
     }
 
     private func format(_ key: String, _ value: JSONValue) -> String {

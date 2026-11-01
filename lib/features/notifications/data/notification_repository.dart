@@ -25,7 +25,12 @@ class NotificationRepository {
     try {
       final hadBaseline = _local.hasCache();
       final knownIds = _local.readAll().map((n) => n.id).toSet();
-      final remote = await _remote.fetchNotifications();
+      await _flushPendingReads();
+      final pending = _local.pendingReadIds();
+      final remote = [
+        for (final n in await _remote.fetchNotifications())
+          pending.contains(n.id) ? n.copyWith(read: true) : n,
+      ];
       await _local.saveAll(remote);
 
       final onNewUnread = _onNewUnread;
@@ -50,10 +55,20 @@ class NotificationRepository {
   Future<void> markRead(String id) async {
     await _local.markReadLocal(id);
     try {
-      await _remote.markRead(id);
+      await _remote.markRead([id]);
     } catch (_) {
-      // Local mark is sufficient offline.
+      // Retried on the next fetch so the server stops counting it unread.
+      await _local.addPendingRead(id);
     }
+  }
+
+  Future<void> _flushPendingReads() async {
+    final pending = _local.pendingReadIds();
+    if (pending.isEmpty) return;
+    try {
+      await _remote.markRead(pending.toList());
+      await _local.removePendingRead(pending);
+    } catch (_) {}
   }
 
   int unreadCount() => _local.unreadCount();

@@ -7,6 +7,10 @@ import 'package:gst_expense_scanner/shared/models/invoice_entity.dart';
 class _FakeLocal implements InvoiceLocalDataSource {
   final Map<String, InvoiceEntity> invoices = {};
   final Set<String> queue = {};
+  DateTime? lastPull;
+
+  @override
+  String get tenantId => 'c';
 
   @override
   Future<void> save(InvoiceEntity invoice) async =>
@@ -26,6 +30,12 @@ class _FakeLocal implements InvoiceLocalDataSource {
       queue.remove(localInvoiceId);
 
   @override
+  Future<DateTime?> lastStatusPullAt() async => lastPull;
+
+  @override
+  Future<void> setLastStatusPullAt(DateTime at) async => lastPull = at;
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -33,10 +43,17 @@ class _FakeRemote implements InvoiceRemoteDataSource {
   _FakeRemote(this.items);
 
   List<Map<String, dynamic>> items;
+  final List<DateTime?> sinceRequested = [];
 
   @override
-  Future<List<Map<String, dynamic>>> fetchMine({int pageSize = 100}) async =>
-      items;
+  Future<({List<Map<String, dynamic>> items, int total})> fetchMinePage({
+    int page = 1,
+    int pageSize = 100,
+    DateTime? updatedSince,
+  }) async {
+    sinceRequested.add(updatedSince);
+    return (items: items, total: items.length);
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -73,11 +90,16 @@ void main() {
         'adminRemarks': 'Photo the GST section',
       },
       {'id': 's-c', 'approvalStatus': 'pending'},
-      {'id': 's-unknown', 'approvalStatus': 'approved'},
+      {
+        'id': 's-unknown',
+        'approvalStatus': 'approved',
+        'vendorName': 'Old Vendor',
+        'netAmount': 420,
+      },
     ]);
     final engine = SyncEngine(localDataSource: local, remoteDataSource: remote);
 
-    expect(await engine.pullStatuses(), 2);
+    expect(await engine.pullStatuses(), 3);
     expect(engine.revision, 1);
     expect(local.invoices['a']!.approvalStatus, ApprovalStatus.approved);
     expect(local.invoices['b']!.approvalStatus, ApprovalStatus.returned);
@@ -85,8 +107,21 @@ void main() {
     expect(local.invoices['b']!.adminRemarks, 'Photo the GST section');
     expect(local.invoices['c']!.approvalStatus, ApprovalStatus.uploaded);
 
+    final imported = local.invoices.values.singleWhere(
+      (i) => i.serverId == 's-unknown',
+    );
+    expect(imported.isServerOnly, isTrue);
+    expect(imported.canDeleteLocally, isFalse);
+    expect(imported.approvalStatus, ApprovalStatus.approved);
+
     expect(await engine.pullStatuses(), 0, reason: 'no-op when unchanged');
     expect(engine.revision, 1);
+    expect(remote.sinceRequested.first, isNull);
+    expect(
+      remote.sinceRequested.last,
+      isNotNull,
+      reason: 'later pulls only ask for changes',
+    );
   });
 
   test('a failing status pull never throws', () async {
@@ -102,6 +137,9 @@ class _ThrowingRemote extends _FakeRemote {
   _ThrowingRemote() : super(const []);
 
   @override
-  Future<List<Map<String, dynamic>>> fetchMine({int pageSize = 100}) =>
-      Future.error(Exception('offline'));
+  Future<({List<Map<String, dynamic>> items, int total})> fetchMinePage({
+    int page = 1,
+    int pageSize = 100,
+    DateTime? updatedSince,
+  }) => Future.error(Exception('offline'));
 }

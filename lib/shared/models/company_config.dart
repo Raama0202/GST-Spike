@@ -1,6 +1,8 @@
 import 'package:equatable/equatable.dart';
 import 'package:flutter/material.dart';
 
+import 'company_identity.dart';
+
 class ExpenseCategory extends Equatable {
   const ExpenseCategory({
     required this.id,
@@ -63,6 +65,9 @@ class CompanyConfig extends Equatable {
     required this.categories,
     required this.branches,
     required this.features,
+    this.legalName,
+    this.gstins = const [],
+    this.nameAliases = const [],
     this.logoUrl,
     this.primaryColorHex,
     this.requiresGps = false,
@@ -73,6 +78,11 @@ class CompanyConfig extends Equatable {
 
   final String companyId;
   final String companyName;
+  final String? legalName;
+
+  /// Every GSTIN the company uses (principal + other states).
+  final List<String> gstins;
+  final List<String> nameAliases;
   final String industry;
   final String? logoUrl;
   final String? primaryColorHex;
@@ -83,6 +93,12 @@ class CompanyConfig extends Equatable {
   final bool duplicateCheckEnabled;
   final double minOcrConfidenceWarn;
   final DateTime? updatedAt;
+
+  /// Used to keep the company itself out of the vendor field on scanned bills.
+  CompanyIdentity get identity => CompanyIdentity(
+        names: [companyName, legalName, ...nameAliases],
+        gstins: gstins,
+      );
 
   Color? get brandColor {
     final hex = primaryColorHex;
@@ -95,6 +111,9 @@ class CompanyConfig extends Equatable {
   Map<String, dynamic> toJson() => {
     'companyId': companyId,
     'companyName': companyName,
+    'legalName': legalName,
+    'gstins': gstins,
+    'nameAliases': nameAliases,
     'industry': industry,
     'logoUrl': logoUrl,
     'primaryColorHex': primaryColorHex,
@@ -111,6 +130,12 @@ class CompanyConfig extends Equatable {
     return CompanyConfig(
       companyId: json['companyId'] as String,
       companyName: json['companyName'] as String? ?? '',
+      legalName: json['legalName'] as String?,
+      gstins: {
+        ..._strings(json['gstins']),
+        if (json['gstin'] is String) json['gstin'] as String,
+      }.toList(),
+      nameAliases: _strings(json['nameAliases']),
       industry: json['industry'] as String? ?? '',
       logoUrl: json['logoUrl'] as String?,
       primaryColorHex:
@@ -136,6 +161,18 @@ class CompanyConfig extends Equatable {
     );
   }
 
+  static List<String> _strings(Object? value) => [
+        for (final item in (value as List?) ?? const [])
+          if (item is String && item.trim().isNotEmpty) item.trim(),
+      ];
+
   @override
-  List<Object?> get props => [companyId, updatedAt, categories.length];
+  List<Object?> get props => [
+        companyId,
+        updatedAt,
+        categories.length,
+        legalName,
+        gstins.join(','),
+        nameAliases.join(','),
+      ];
 }

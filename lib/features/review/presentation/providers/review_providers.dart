@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/constants/app_constants.dart';
 import '../../../../shared/models/invoice_entity.dart';
+import '../../../company_config/presentation/company_config_providers.dart';
 
 /// Draft invoice assembled during scan → OCR → review.
 class ReviewDraft {
@@ -151,5 +152,8 @@ final reviewHasDraftProvider = Provider<bool>((ref) {
 final reviewLowConfidenceProvider = Provider<bool>((ref) {
   final draft = ref.watch(reviewDraftProvider);
   if (draft == null) return false;
-  return draft.ocrConfidence < AppConstants.lowOcrConfidenceThreshold;
+  final threshold =
+      ref.watch(activeCompanyConfigProvider)?.minOcrConfidenceWarn ??
+      AppConstants.lowOcrConfidenceThreshold;
+  return draft.ocrConfidence < threshold;
 });

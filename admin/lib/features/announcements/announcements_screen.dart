@@ -56,10 +56,7 @@ class _AnnouncementsScreenState extends ConsumerState<AnnouncementsScreen> {
           .read(dioProvider)
           .post(
             ApiPaths.announcements,
-            data: {
-              'title': _title.text.trim(),
-              'body': _message.text.trim(),
-            },
+            data: {'title': _title.text.trim(), 'body': _message.text.trim()},
           );
       _title.clear();
       _message.clear();
@@ -90,6 +87,7 @@ class _AnnouncementsScreenState extends ConsumerState<AnnouncementsScreen> {
 
   @override
   Widget build(BuildContext context) => ContentPage(
+    onRefresh: () => ref.refresh(announcementHistoryProvider.future),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

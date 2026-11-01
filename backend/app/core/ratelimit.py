@@ -6,11 +6,19 @@ from app.core.cache import get_store
 from app.core.config import settings
 
 
+def resolve_client_ip(forwarded: str | None, peer: str | None) -> str:
+    """Clients can prepend anything to X-Forwarded-For; only the entries added by
+    our own proxies (TRUSTED_PROXY_HOPS, counted from the right) are reliable."""
+    hops = settings.trusted_proxy_hops
+    if forwarded and hops > 0:
+        parts = [part.strip() for part in forwarded.split(",") if part.strip()]
+        if parts:
+            return parts[-hops] if len(parts) >= hops else parts[0]
+    return peer or "unknown"
+
+
 def client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return resolve_client_ip(request.headers.get("x-forwarded-for"), request.client.host if request.client else None)
 
 
 async def allow(key: str, limit: int, window_seconds: int) -> bool:
@@ -27,11 +35,11 @@ async def enforce(key: str, limit: int, window_seconds: int, message: str = "Too
         raise HTTPException(429, message, headers={"Retry-After": str(window_seconds)})
 
 
-async def check_login_lockout(identity: str) -> None:
+async def check_login_lockout(identity: str, threshold: int | None = None) -> None:
     if not settings.rate_limit_enabled:
         return
     failures = await get_store().get(f"lock:{identity}")
-    if failures and int(failures) >= settings.login_lockout_failures:
+    if failures and int(failures) >= (threshold or settings.login_lockout_failures):
         raise HTTPException(
             429,
             f"Too many failed attempts. Try again in {settings.login_lockout_minutes} minutes.",

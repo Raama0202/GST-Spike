@@ -28,15 +28,29 @@ class DocumentScannerService {
   }
 
   /// Opens the native document scanner UI. Returns null when cancelled.
+  /// ML Kit's scanner is Android-only and needs Google Play services, so iOS
+  /// and devices without it fall back to the plain camera.
   Future<String?> scanDocument() async {
+    if (!Platform.isAndroid) return _captureWithCamera();
     try {
       final result = await _documentScanner.scanDocument();
       if (result.images.isEmpty) return null;
       return result.images.first;
     } on PlatformException catch (e) {
       if (_isCancellation(e)) return null;
-      rethrow;
+      return _captureWithCamera();
+    } on MissingPluginException {
+      return _captureWithCamera();
     }
+  }
+
+  Future<String?> _captureWithCamera() async {
+    final picked = await _imagePicker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 100,
+      preferredCameraDevice: CameraDevice.rear,
+    );
+    return picked?.path;
   }
 
   /// Picks a single image from the device gallery.

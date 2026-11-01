@@ -16,7 +16,12 @@ abstract final class Brand {
   static const orange = Color(0xFFF97316);
   static const ink = Color(0xFF0F172A);
   static const muted = Color(0xFF64748B);
+  static const inkDark = Color(0xFFE2E8F0);
+  static const mutedDark = Color(0xFF94A3B8);
 }
+
+bool isDarkTheme(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark;
 
 abstract final class GlassMetrics {
   static const radius = 24.0;
@@ -33,6 +38,8 @@ class GlassBackground extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final brand = Theme.of(context).colorScheme.primary;
+    final dark = isDarkTheme(context);
+    final orb = dark ? 0.22 : 0.5;
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -44,38 +51,63 @@ class GlassBackground extends StatelessWidget {
               return Stack(
                 fit: StackFit.expand,
                 children: [
-                  const DecoratedBox(
+                  DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
-                        colors: [
-                          Color(0xFFEEF2FF),
-                          Color(0xFFF5F3FF),
-                          Color(0xFFECFEFF),
-                        ],
+                        colors: dark
+                            ? const [
+                                Color(0xFF0B1022),
+                                Color(0xFF120F2A),
+                                Color(0xFF071A24),
+                              ]
+                            : const [
+                                Color(0xFFEEF2FF),
+                                Color(0xFFF5F3FF),
+                                Color(0xFFECFEFF),
+                              ],
                       ),
                     ),
                   ),
-                  _orb(brand, w * 1.15, left: -w * 0.45, top: -h * 0.18),
-                  _orb(Brand.violet, w * 0.95, left: w * 0.45, top: h * 0.12),
-                  _orb(Brand.cyan, w * 0.9, left: -w * 0.25, top: h * 0.55),
+                  _orb(
+                    brand,
+                    w * 1.15,
+                    left: -w * 0.45,
+                    top: -h * 0.18,
+                    opacity: orb,
+                  ),
+                  _orb(
+                    Brand.violet,
+                    w * 0.95,
+                    left: w * 0.45,
+                    top: h * 0.12,
+                    opacity: orb,
+                  ),
+                  _orb(
+                    Brand.cyan,
+                    w * 0.9,
+                    left: -w * 0.25,
+                    top: h * 0.55,
+                    opacity: orb,
+                  ),
                   _orb(
                     Brand.pink,
                     w * 0.6,
                     left: w * 0.6,
                     top: h * 0.72,
-                    opacity: 0.35,
+                    opacity: orb * 0.7,
                   ),
-                  const DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.center,
-                        colors: [Color(0x40FFFFFF), Color(0x00FFFFFF)],
+                  if (!dark)
+                    const DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.center,
+                          colors: [Color(0x40FFFFFF), Color(0x00FFFFFF)],
+                        ),
                       ),
                     ),
-                  ),
                 ],
               );
             },
@@ -141,7 +173,31 @@ BoxDecoration glassDecoration({
   double radius = GlassMetrics.radius,
   Color? tint,
   double opacity = 0.62,
+  bool dark = false,
 }) {
+  if (dark) {
+    return BoxDecoration(
+      borderRadius: BorderRadius.circular(radius),
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          const Color(0xFF334155).withValues(alpha: opacity),
+          (tint ?? const Color(0xFF1E293B)).withValues(
+            alpha: tint == null ? opacity : 0.2,
+          ),
+        ],
+      ),
+      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x33000000),
+          blurRadius: 24,
+          offset: Offset(0, 12),
+        ),
+      ],
+    );
+  }
   return BoxDecoration(
     borderRadius: BorderRadius.circular(radius),
     gradient: LinearGradient(
@@ -188,7 +244,11 @@ class GlassCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget surface = DecoratedBox(
-      decoration: glassDecoration(radius: radius, tint: tint),
+      decoration: glassDecoration(
+        radius: radius,
+        tint: tint,
+        dark: isDarkTheme(context),
+      ),
       child: Material(
         type: MaterialType.transparency,
         child: InkWell(
@@ -323,6 +383,7 @@ class GlassIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = isDarkTheme(context);
     return Tooltip(
       message: tooltip ?? '',
       child: Stack(
@@ -331,8 +392,12 @@ class GlassIconButton extends StatelessWidget {
           DecoratedBox(
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: Colors.white.withValues(alpha: 0.6),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.9)),
+              color: dark
+                  ? const Color(0xFF1E293B).withValues(alpha: 0.8)
+                  : Colors.white.withValues(alpha: 0.6),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: dark ? 0.12 : 0.9),
+              ),
               boxShadow: const [
                 BoxShadow(
                   color: Color(0x12000000),
@@ -349,7 +414,11 @@ class GlassIconButton extends StatelessWidget {
                 child: SizedBox(
                   width: 44,
                   height: 44,
-                  child: Icon(icon, size: 22, color: Brand.ink),
+                  child: Icon(
+                    icon,
+                    size: 22,
+                    color: dark ? Brand.inkDark : Brand.ink,
+                  ),
                 ),
               ),
             ),
@@ -499,7 +568,7 @@ class GlassSectionHeader extends StatelessWidget {
                   Text(
                     subtitle!,
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: Brand.muted,
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
               ],

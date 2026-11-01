@@ -5,7 +5,7 @@
 1. **Employee APK** — Google Play (`com.gstexpenses.gst_expense_scanner`)
 2. **Admin Web** — Flutter web hosted on HTTPS (Cloudflare / Firebase Hosting / Nginx)
 3. **Admin APK** (optional) — same Flutter admin project for Android tablets
-4. **API + PostgreSQL** — Docker Compose or managed Postgres (RDS / Cloud SQL)
+4. **API + MongoDB Atlas** — Render (see [GO_LIVE.md](GO_LIVE.md)) or Docker Compose
 
 ## Subscription packaging (suggested)
 
@@ -26,7 +26,7 @@ Billing can start as invoice-based (manual Super Admin extend) then add Razorpay
 - [ ] TLS certificates on API + admin web
 - [ ] Certificate pins for employee app (`CERT_PINS_SHA256`)
 - [ ] Play Console Data Safety form (camera, photos, location optional)
-- [ ] Backup Postgres daily
+- [ ] Database backups (Atlas M10+ has continuous backup; on M0 schedule `mongodump`)
 - [ ] Staged Play rollout 10% → 100%
 
 ## Build commands
@@ -82,5 +82,5 @@ docker compose up -d --build
 ## Legal / compliance notes
 
 - Store invoice images for the retention period your customers require  
-- GST data is sensitive financial data — encrypt at rest (disk / Postgres TDE)  
+- GST data is sensitive financial data — encrypt at rest (Atlas encrypts storage at rest by default)  
 - Provide DPA for B2B customers  

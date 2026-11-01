@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../core/api_client.dart';
 import '../../core/constants.dart';
 import '../../core/glass.dart';
 import '../../core/server_config.dart';
+import '../../core/session.dart';
 import 'auth.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -17,6 +19,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   bool _obscure = true;
+  bool _busy = false;
 
   @override
   void dispose() {
@@ -26,16 +29,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    await ref.read(authProvider.notifier).login(_email.text, _password.text);
-    if (!mounted) return;
-    ref
-        .read(authProvider)
-        .whenOrNull(
-          error: (error, _) => ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text(apiError(error)))),
-        );
+    if (_busy || !_formKey.currentState!.validate()) return;
+    setState(() => _busy = true);
+    try {
+      await ref.read(authProvider.notifier).login(_email.text, _password.text);
+    } catch (error) {
+      // Subscription/suspension errors route to their own screen.
+      if (mounted && accountBlockOf(error) == null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _editServer() async {
@@ -104,7 +111,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final auth = ref.watch(authProvider);
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -138,9 +144,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         Text(
                           'Sign in to manage your expense operations.',
                           textAlign: TextAlign.center,
-                          style: Theme.of(
-                            context,
-                          ).textTheme.bodyLarge?.copyWith(color: Brand.muted),
+                          style: Theme.of(context).textTheme.bodyLarge
+                              ?.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
                         ),
                         const SizedBox(height: 28),
                         TextFormField(
@@ -179,12 +188,40 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               : null,
                           onFieldSubmitted: (_) => _submit(),
                         ),
-                        const SizedBox(height: 24),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton(
+                            onPressed: _busy
+                                ? null
+                                : () => context.push(
+                                    '/forgot-password',
+                                    extra: _email.text.trim(),
+                                  ),
+                            child: const Text('Forgot password?'),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
                         GlassButton(
                           label: 'Sign in',
                           icon: Icons.login_rounded,
-                          loading: auth.isLoading,
+                          loading: _busy,
                           onPressed: _submit,
+                        ),
+                        if (_busy) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'The server may take up to a minute to wake up.',
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        OutlinedButton.icon(
+                          onPressed: _busy
+                              ? null
+                              : () => context.push('/register'),
+                          icon: const Icon(Icons.add_business_outlined),
+                          label: const Text('New company? Register your firm'),
                         ),
                         const SizedBox(height: 16),
                         TextButton(

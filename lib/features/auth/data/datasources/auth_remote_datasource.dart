@@ -1,7 +1,10 @@
+import 'package:flutter/foundation.dart';
+
 import 'package:gst_expense_scanner/core/constants/app_constants.dart';
 import 'package:gst_expense_scanner/core/errors/exceptions.dart';
 import 'package:gst_expense_scanner/core/errors/failures.dart';
 import 'package:gst_expense_scanner/core/network/api_client.dart';
+import 'package:gst_expense_scanner/features/auth/domain/repositories/auth_repository.dart';
 import 'package:gst_expense_scanner/shared/models/employee_entity.dart';
 
 /// Remote authentication API backed by [ApiClient].
@@ -10,10 +13,20 @@ class AuthRemoteDataSource {
 
   final ApiClient _apiClient;
 
-  Future<void> requestOtp(String mobile) async {
-    await _apiClient.post<void>(
+  Future<OtpDelivery> requestOtp(String mobile) async {
+    final response = await _apiClient.post<dynamic>(
       ApiEndpoints.requestOtp,
       data: {'mobile': mobile},
+    );
+    final data = response.data;
+    final map = data is Map ? Map<String, dynamic>.from(data) : const {};
+    final channel = map['channel'] == 'email' ? 'email' : 'sms';
+    final destination = map['destination'] as String?;
+    return OtpDelivery(
+      channel: channel,
+      destination: destination == null || destination.isEmpty
+          ? mobile
+          : destination,
     );
   }
 
@@ -46,16 +59,22 @@ class AuthRemoteDataSource {
   Future<void> registerDevice({
     required String deviceId,
     required String appVersion,
+    String? fcmToken,
   }) async {
     await _apiClient.post<void>(
       ApiEndpoints.deviceRegister,
       data: {
         'deviceId': deviceId,
-        'platform': 'android',
+        'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
         'appVersion': appVersion,
-        'fcmToken': null,
+        'fcmToken': fcmToken,
       },
     );
+  }
+
+  /// `DELETE /devices/{deviceId}` so pushes stop reaching a signed-out phone.
+  Future<void> unregisterDevice(String deviceId) async {
+    await _apiClient.delete<void>(ApiEndpoints.device(deviceId));
   }
 
   Future<EmployeeEntity> fetchMe() async {

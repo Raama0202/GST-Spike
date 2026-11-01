@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'package:gst_expense_scanner/core/constants/app_constants.dart';
 import 'package:gst_expense_scanner/core/services/notification_service.dart';
 import 'package:gst_expense_scanner/core/theme/glass.dart';
+import 'package:gst_expense_scanner/features/auth/domain/repositories/auth_repository.dart';
 import 'package:gst_expense_scanner/features/auth/presentation/providers/auth_providers.dart';
 import 'package:gst_expense_scanner/features/sync/presentation/sync_providers.dart';
 
@@ -16,10 +17,12 @@ class OtpScreen extends ConsumerStatefulWidget {
     super.key,
     required this.mobile,
     required this.rememberLogin,
+    this.delivery,
   });
 
   final String mobile;
   final bool rememberLogin;
+  final OtpDelivery? delivery;
 
   @override
   ConsumerState<OtpScreen> createState() => _OtpScreenState();
@@ -33,11 +36,23 @@ class _OtpScreenState extends ConsumerState<OtpScreen> {
   int _secondsRemaining = AppConstants.otpResendSeconds;
   bool _verifying = false;
   bool _resending = false;
+  late OtpDelivery? _delivery = widget.delivery;
 
   @override
   void initState() {
     super.initState();
     _startResendTimer();
+  }
+
+  bool get _byEmail => _delivery?.isEmail ?? false;
+
+  String get _sentTo {
+    final delivery = _delivery;
+    if (delivery != null && delivery.isEmail) return delivery.destination;
+    final masked = delivery != null && delivery.destination.contains('*')
+        ? delivery.destination
+        : _maskMobile(widget.mobile);
+    return '+91 $masked';
   }
 
   @override
@@ -102,9 +117,13 @@ class _OtpScreenState extends ConsumerState<OtpScreen> {
     if (_secondsRemaining > 0 || _resending) return;
 
     setState(() => _resending = true);
-    await ref.read(authStateProvider.notifier).sendOtp(widget.mobile);
+    final delivery =
+        await ref.read(authStateProvider.notifier).sendOtp(widget.mobile);
     if (!mounted) return;
-    setState(() => _resending = false);
+    setState(() {
+      _resending = false;
+      _delivery = delivery ?? _delivery;
+    });
 
     final authState = ref.read(authStateProvider);
     if (authState is AuthErrorState) {
@@ -140,7 +159,7 @@ class _OtpScreenState extends ConsumerState<OtpScreen> {
             children: [
               Center(
                 child: IconBadge(
-                  icon: Icons.sms_rounded,
+                  icon: _byEmail ? Icons.mark_email_unread_rounded : Icons.sms_rounded,
                   color: theme.colorScheme.primary,
                   size: 68,
                 ),
@@ -153,7 +172,9 @@ class _OtpScreenState extends ConsumerState<OtpScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'We sent a code to +91 ${_maskMobile(widget.mobile)}',
+                _byEmail
+                    ? 'We emailed a code to $_sentTo'
+                    : 'We sent a code to $_sentTo',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyLarge?.copyWith(color: Brand.muted),
               ),
@@ -215,7 +236,9 @@ class _OtpScreenState extends ConsumerState<OtpScreen> {
               ),
               const SizedBox(height: 24),
               Text(
-                'Did not receive the code? Check SMS or tap resend after the timer.',
+                _byEmail
+                    ? 'No email? Check your spam folder, or tap resend after the timer.'
+                    : 'Did not receive the code? Check SMS or tap resend after the timer.',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium?.copyWith(color: Brand.muted),
               ),

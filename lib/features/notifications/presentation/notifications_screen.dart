@@ -57,8 +57,10 @@ class NotificationsScreen extends ConsumerWidget {
                   color: notification.read
                       ? null
                       : Color.alphaBlend(
-                          theme.colorScheme.primary.withValues(alpha: 0.08),
-                          Colors.white.withValues(alpha: 0.75),
+                          theme.colorScheme.primary.withValues(alpha: 0.10),
+                          GlassPalette.isDark(context)
+                              ? const Color(0xFF1E293B).withValues(alpha: 0.9)
+                              : Colors.white.withValues(alpha: 0.75),
                         ),
                   child: ListTile(
                     contentPadding: const EdgeInsets.all(16),
@@ -95,10 +97,14 @@ class NotificationsScreen extends ConsumerWidget {
                           .read(notificationRepositoryProvider)
                           .markRead(notification.id);
                       ref.invalidate(notificationsListProvider);
+                      if (!context.mounted) return;
 
-                      if (notification.invoiceLocalId != null &&
-                          context.mounted) {
-                        context.push('/uploads/${notification.invoiceLocalId}');
+                      final serverId = notification.invoiceServerId;
+                      final localId = notification.invoiceLocalId;
+                      if (serverId != null && serverId.isNotEmpty) {
+                        context.push('/uploads/server/$serverId');
+                      } else if (localId != null && localId.isNotEmpty) {
+                        context.push('/uploads/$localId');
                       }
                     },
                   ),

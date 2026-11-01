@@ -8,18 +8,16 @@ import json
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.core.security import hash_password
+import factories as f
 from app.main import app
-from app.models import Role, SubscriptionPlan, User
+from app.models import Role
 
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
 
 
-async def seed_platform(session_factory):
-    async with session_factory() as db:
-        db.add(SubscriptionPlan(code="growth", name="Growth", monthly_price_inr=2499, max_employees=50))
-        db.add(User(email="root@platform.app", password_hash=hash_password("RootPassword!1"), role=Role.super_admin))
-        await db.commit()
+async def seed_platform(db):
+    await f.plan(db, code="growth", name="Growth", price=2499, max_employees=50)
+    await f.user(db, None, Role.super_admin, email="root@platform.app", password="RootPassword!1")
 
 
 def bearer(token, company_id=None, device="device-1"):
@@ -30,9 +28,8 @@ def bearer(token, company_id=None, device="device-1"):
 
 
 @pytest.mark.asyncio
-async def test_full_platform_journey(db_engine):
-    _, session_factory, _ = db_engine
-    await seed_platform(session_factory)
+async def test_full_platform_journey(mongo):
+    await seed_platform(mongo)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         # --- Super admin (web dashboard) creates and activates a company ---
@@ -76,7 +73,7 @@ async def test_full_platform_journey(db_engine):
         r = await c.post("/v1/admin/company/branches", headers=adm, json={"name": "Hyderabad", "code": "HYD"})
         assert r.status_code == 201, r.text
         branch_id = r.json()["id"]
-        r = await c.post("/v1/admin/company/categories", headers=adm, json={"name": "Travel", "sortOrder": 1})
+        r = await c.post("/v1/admin/company/categories", headers=adm, json={"name": "Site visits", "sortOrder": 1})
         assert r.status_code == 201, r.text
         category_id = r.json()["id"]
 
@@ -111,8 +108,8 @@ async def test_full_platform_journey(db_engine):
         config = (await c.get("/v1/company/config", headers=emp)).json()
         assert config["companyName"] == "Sunrise Traders"
         assert config["primaryColorHex"] == "0B5FFF"
-        assert [b["id"] for b in config["branches"]] == [branch_id]
-        assert [x["id"] for x in config["categories"]] == [category_id]
+        assert branch_id in [b["id"] for b in config["branches"]]
+        assert category_id in [x["id"] for x in config["categories"]]
 
         r = await c.post("/v1/devices/register", headers=emp, json={
             "deviceId": "phone-ravi", "platform": "ios", "appVersion": "1.0.0",
@@ -223,9 +220,8 @@ async def test_full_platform_journey(db_engine):
 
 
 @pytest.mark.asyncio
-async def test_company_admin_cannot_reach_super_routes(db_engine):
-    _, session_factory, _ = db_engine
-    await seed_platform(session_factory)
+async def test_company_admin_cannot_reach_super_routes(mongo):
+    await seed_platform(mongo)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         root = (await c.post("/v1/admin/auth/login", json={"email": "root@platform.app", "password": "RootPassword!1"})).json()
         su = bearer(root["accessToken"])

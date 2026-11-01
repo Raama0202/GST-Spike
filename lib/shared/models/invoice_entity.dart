@@ -107,21 +107,29 @@ class InvoiceFieldData extends Equatable {
       vendorName: json['vendorName'] as String?,
       gstin: json['gstin'] as String?,
       invoiceNumber: json['invoiceNumber'] as String?,
-      invoiceDate: json['invoiceDate'] != null
+      invoiceDate: json['invoiceDate'] is String
           ? DateTime.tryParse(json['invoiceDate'] as String)
           : null,
-      taxableValue: (json['taxableValue'] as num?)?.toDouble(),
-      cgst: (json['cgst'] as num?)?.toDouble(),
-      sgst: (json['sgst'] as num?)?.toDouble(),
-      igst: (json['igst'] as num?)?.toDouble(),
-      discount: (json['discount'] as num?)?.toDouble(),
-      netAmount: (json['netAmount'] as num?)?.toDouble(),
+      // Admin edits use taxableAmount / totalAmount.
+      taxableValue: _num(json['taxableValue'] ?? json['taxableAmount']),
+      cgst: _num(json['cgst']),
+      sgst: _num(json['sgst']),
+      igst: _num(json['igst']),
+      discount: _num(json['discount']),
+      netAmount: _num(json['netAmount'] ?? json['totalAmount']),
       expenseCategoryId: json['expenseCategoryId'] as String?,
       expenseCategoryName: json['expenseCategoryName'] as String?,
       remarks: json['remarks'] as String?,
       supplierPhone: json['supplierPhone'] as String?,
       supplierEmail: json['supplierEmail'] as String?,
     );
+  }
+
+  /// Amounts may arrive as numbers or decimal strings.
+  static double? _num(Object? value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value.replaceAll(',', ''));
+    return null;
   }
 
   @override
@@ -169,7 +177,14 @@ class InvoiceEntity extends Equatable {
     this.adminRemarks,
     this.uploadedAt,
     this.duplicateOverride = false,
+    this.uploadErrorCode,
+    this.imageUrl,
+    this.thumbnailUrl,
   });
+
+  /// Upload error codes that need the employee to act (no auto-retry).
+  static const errorDuplicate = 'duplicate';
+  static const errorRejected = 'rejected';
 
   final String localId;
   final String? serverId;
@@ -194,9 +209,33 @@ class InvoiceEntity extends Equatable {
   final String? idempotencyKey;
   final String? adminRemarks;
   final bool duplicateOverride;
+  final String? uploadErrorCode;
+
+  /// Signed, short-lived server image links (history entries have no files).
+  final String? imageUrl;
+  final String? thumbnailUrl;
 
   InvoiceFieldData get displayData => editedData;
 
+  /// Imported from server history; there are no local files to upload.
+  bool get isServerOnly =>
+      serverId != null &&
+      originalImagePath == null &&
+      compressedImagePath == null &&
+      thumbnailPath == null;
+
+  /// Not yet on the server, so it can be discarded from this device.
+  bool get canDeleteLocally =>
+      serverId == null && syncStatus != SyncStatus.uploading;
+
+  bool get needsDuplicateOverride =>
+      syncStatus == SyncStatus.failed && uploadErrorCode == errorDuplicate;
+
+  bool get canResubmit =>
+      serverId != null && approvalStatus == ApprovalStatus.returned;
+
+  /// [clearUploadError] resets the error message and code, which a plain
+  /// `null` argument cannot do.
   InvoiceEntity copyWith({
     String? serverId,
     SyncStatus? syncStatus,
@@ -216,6 +255,11 @@ class InvoiceEntity extends Equatable {
     DateTime? uploadedAt,
     bool? duplicateOverride,
     String? branchId,
+    String? uploadErrorCode,
+    String? imageUrl,
+    String? thumbnailUrl,
+    bool clearUploadError = false,
+    bool clearOriginalImage = false,
   }) {
     return InvoiceEntity(
       localId: localId,
@@ -231,16 +275,95 @@ class InvoiceEntity extends Equatable {
       ocrData: ocrData ?? this.ocrData,
       editedData: editedData ?? this.editedData,
       ocrConfidence: ocrConfidence ?? this.ocrConfidence,
-      originalImagePath: originalImagePath ?? this.originalImagePath,
+      originalImagePath: clearOriginalImage
+          ? null
+          : originalImagePath ?? this.originalImagePath,
       compressedImagePath: compressedImagePath ?? this.compressedImagePath,
       thumbnailPath: thumbnailPath ?? this.thumbnailPath,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
       uploadAttempts: uploadAttempts ?? this.uploadAttempts,
-      lastUploadError: lastUploadError ?? this.lastUploadError,
+      lastUploadError: clearUploadError
+          ? null
+          : lastUploadError ?? this.lastUploadError,
       idempotencyKey: idempotencyKey ?? this.idempotencyKey,
       adminRemarks: adminRemarks ?? this.adminRemarks,
       duplicateOverride: duplicateOverride ?? this.duplicateOverride,
+      uploadErrorCode: clearUploadError
+          ? null
+          : uploadErrorCode ?? this.uploadErrorCode,
+      imageUrl: imageUrl ?? this.imageUrl,
+      thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
+    );
+  }
+
+  /// A read-only entry built from a `GET /invoices/mine` or
+  /// `GET /invoices/{id}` summary (e.g. history after a reinstall).
+  factory InvoiceEntity.fromServer(
+    Map<String, dynamic> item, {
+    required String companyId,
+    required String employeeId,
+  }) {
+    final serverId = item['id'] as String;
+    final key = item['localIdempotencyKey'] as String?;
+    final edited = InvoiceFieldData.fromJson(
+      (item['editedData'] as Map?)?.cast<String, dynamic>(),
+    );
+    final uploadedAt = item['uploadedAt'] is String
+        ? DateTime.tryParse(item['uploadedAt'] as String)?.toLocal()
+        : null;
+    return InvoiceEntity(
+      localId: 'srv_$serverId',
+      serverId: serverId,
+      companyId: companyId,
+      employeeId: employeeId,
+      branchId: item['branchId'] as String? ?? '',
+      deviceId: item['deviceId'] as String? ?? '',
+      createdAt: uploadedAt ?? DateTime.now(),
+      uploadedAt: uploadedAt,
+      syncStatus: SyncStatus.uploaded,
+      approvalStatus:
+          approvalStatusFromApi(item['approvalStatus'] as String?) ??
+              ApprovalStatus.uploaded,
+      ocrData: InvoiceFieldData.fromJson(
+        (item['ocrData'] as Map?)?.cast<String, dynamic>(),
+      ),
+      editedData: mergeServerFields(edited, item),
+      ocrConfidence: 0,
+      idempotencyKey: key,
+      adminRemarks: item['adminRemarks'] as String?,
+      imageUrl: item['imageUrl'] as String?,
+      thumbnailUrl: item['thumbnailUrl'] as String?,
+    );
+  }
+
+  /// Fills gaps in [data] from the server's normalised top-level columns.
+  static InvoiceFieldData mergeServerFields(
+    InvoiceFieldData data,
+    Map<String, dynamic> item,
+  ) {
+    final date = item['invoiceDate'];
+    final net = item['netAmount'];
+    return InvoiceFieldData(
+      vendorName: data.vendorName ?? item['vendorName'] as String?,
+      gstin: data.gstin ?? item['gstin'] as String?,
+      invoiceNumber: data.invoiceNumber ?? item['invoiceNumber'] as String?,
+      invoiceDate:
+          data.invoiceDate ?? (date is String ? DateTime.tryParse(date) : null),
+      taxableValue: data.taxableValue,
+      cgst: data.cgst,
+      sgst: data.sgst,
+      igst: data.igst,
+      discount: data.discount,
+      netAmount: data.netAmount ??
+          (net is num ? net.toDouble() : double.tryParse('${net ?? ''}')),
+      expenseCategoryId:
+          data.expenseCategoryId ?? item['categoryId'] as String?,
+      expenseCategoryName:
+          data.expenseCategoryName ?? item['categoryName'] as String?,
+      remarks: data.remarks,
+      supplierPhone: data.supplierPhone,
+      supplierEmail: data.supplierEmail,
     );
   }
 
@@ -268,6 +391,9 @@ class InvoiceEntity extends Equatable {
     'idempotencyKey': idempotencyKey,
     'adminRemarks': adminRemarks,
     'duplicateOverride': duplicateOverride,
+    'uploadErrorCode': uploadErrorCode,
+    'imageUrl': imageUrl,
+    'thumbnailUrl': thumbnailUrl,
   };
 
   factory InvoiceEntity.fromJson(Map<String, dynamic> json) {
@@ -303,9 +429,37 @@ class InvoiceEntity extends Equatable {
       idempotencyKey: json['idempotencyKey'] as String?,
       adminRemarks: json['adminRemarks'] as String?,
       duplicateOverride: json['duplicateOverride'] as bool? ?? false,
+      uploadErrorCode: json['uploadErrorCode'] as String?,
+      imageUrl: json['imageUrl'] as String?,
+      thumbnailUrl: json['thumbnailUrl'] as String?,
     );
   }
 
   @override
-  List<Object?> get props => [localId, syncStatus, approvalStatus, editedData];
+  List<Object?> get props => [
+    localId,
+    serverId,
+    syncStatus,
+    approvalStatus,
+    editedData,
+    adminRemarks,
+    lastUploadError,
+  ];
+}
+
+/// Maps the API's `approvalStatus`; the server's `pending` means submitted.
+ApprovalStatus? approvalStatusFromApi(String? value) {
+  switch (value?.toLowerCase()) {
+    case 'pending':
+    case 'uploaded':
+      return ApprovalStatus.uploaded;
+    case 'approved':
+      return ApprovalStatus.approved;
+    case 'rejected':
+      return ApprovalStatus.rejected;
+    case 'returned':
+      return ApprovalStatus.returned;
+    default:
+      return null;
+  }
 }

@@ -32,8 +32,8 @@ async def hash_password_async(password: str) -> str:
     return await anyio.to_thread.run_sync(hash_password, password)
 
 
-def hash_otp(code: str) -> str:
-    return sha256(f"{settings.jwt_secret}:{code}".encode()).hexdigest()
+def hash_otp(code: str, scope: str = "") -> str:
+    return sha256(f"{settings.jwt_secret}:{scope}:{code}".encode()).hexdigest()
 
 
 def create_token(
@@ -42,6 +42,7 @@ def create_token(
     company_id: UUID | str | None,
     employee_id: UUID | str | None = None,
     token_type: str = "access",
+    token_version: int = 0,
 ) -> tuple[str, int]:
     now = datetime.now(timezone.utc)
     lifetime = (
@@ -56,6 +57,8 @@ def create_token(
         "company_id": str(company_id) if company_id else None,
         "employee_id": str(employee_id) if employee_id else None,
         "type": token_type,
+        # Bumped on password change/reset so every outstanding token stops working.
+        "tv": token_version,
         # iat/exp have 1s resolution; without a nonce two tokens minted in the same
         # second are identical and a rotated refresh token could be replayed.
         "jti": uuid4().hex,

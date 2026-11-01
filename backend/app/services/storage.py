@@ -1,22 +1,27 @@
 """Invoice image storage.
 
-`local` keeps files on disk (dev/tests) and serves them through the signed
-`/v1/media/...` route. `r2` stores them in a Cloudflare R2 bucket (S3 API) and
-hands out short-lived presigned URLs, so images are never publicly listable
-and every API instance sees the same files.
+`gridfs` keeps images inside MongoDB (no extra service; survives redeploys on
+hosts without a persistent disk such as Render's free tier). `local` keeps
+files on disk (dev/tests). Both are served through the signed `/v1/media/...`
+route. `r2` stores them in a Cloudflare R2 bucket (S3 API, 10 GB free) and
+hands out short-lived presigned URLs. In every mode images are never publicly
+listable.
 """
 import asyncio
 import hashlib
 import hmac
+import logging
 import time
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlencode
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from fastapi import UploadFile
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 MAX_FILE_SIZE = 15 * 1024 * 1024
 EXTENSIONS = {
@@ -56,8 +61,57 @@ class LocalStorage:
         await asyncio.to_thread(target.write_bytes, data)
 
     def url(self, key: str) -> str:
-        expires = int(time.time()) + settings.signed_url_seconds
-        return f"/v1/media/{key}?" + urlencode({"exp": expires, "sig": sign_media(key, expires)})
+        return signed_media_url(key)
+
+    async def get(self, key: str) -> bytes | None:
+        try:
+            path = self.path_for(key)
+        except ValueError:
+            return None
+        if not path.is_file():
+            return None
+        return await asyncio.to_thread(path.read_bytes)
+
+    async def delete(self, key: str) -> None:
+        try:
+            await asyncio.to_thread(self.path_for(key).unlink, missing_ok=True)
+        except ValueError:
+            pass
+
+
+class GridFSStorage:
+    BUCKET = "media"
+
+    @classmethod
+    def _bucket(cls):
+        from gridfs import AsyncGridFSBucket
+
+        from app.db.mongo import get_database
+
+        return AsyncGridFSBucket(get_database(), bucket_name=cls.BUCKET)
+
+    async def put(self, key: str, data: bytes, content_type: str) -> None:
+        await self._bucket().upload_from_stream_with_id(key, key, data, metadata={"contentType": content_type})
+
+    def url(self, key: str) -> str:
+        return signed_media_url(key)
+
+    async def get(self, key: str) -> bytes | None:
+        from gridfs.errors import NoFile
+
+        try:
+            stream = await self._bucket().open_download_stream(key)
+        except NoFile:
+            return None
+        return await stream.read()
+
+    async def delete(self, key: str) -> None:
+        from gridfs.errors import NoFile
+
+        try:
+            await self._bucket().delete(key)
+        except NoFile:
+            pass
 
 
 class R2Storage:
@@ -82,6 +136,9 @@ class R2Storage:
             ExpiresIn=settings.signed_url_seconds,
         )
 
+    async def delete(self, key: str) -> None:
+        await asyncio.to_thread(self.client.delete_object, Bucket=self.bucket, Key=key)
+
     async def ping(self) -> bool:
         try:
             await asyncio.to_thread(self.client.head_bucket, Bucket=self.bucket)
@@ -105,19 +162,26 @@ def _r2_client():
     )
 
 
-_storage: LocalStorage | R2Storage | None = None
+Storage = LocalStorage | GridFSStorage | R2Storage
+_storage: Storage | None = None
 
 
-def get_storage() -> LocalStorage | R2Storage:
+def get_storage() -> Storage:
     global _storage
     if _storage is None:
-        _storage = R2Storage() if settings.storage_backend == "r2" else LocalStorage()
+        backend = settings.storage_backend.strip().lower()
+        _storage = R2Storage() if backend == "r2" else LocalStorage() if backend == "local" else GridFSStorage()
     return _storage
 
 
-def set_storage(storage: LocalStorage | R2Storage | None) -> None:
+def set_storage(storage: Storage | None) -> None:
     global _storage
     _storage = storage
+
+
+def signed_media_url(key: str) -> str:
+    expires = int(time.time()) + settings.signed_url_seconds
+    return f"/v1/media/{key}?" + urlencode({"exp": expires, "sig": sign_media(key, expires)})
 
 
 def sign_media(key: str, expires: int) -> str:
@@ -128,7 +192,7 @@ def verify_media(key: str, expires: int, signature: str) -> bool:
     return expires >= int(time.time()) and hmac.compare_digest(sign_media(key, expires), signature)
 
 
-async def save_upload(file: UploadFile, company_id: UUID, kind: str) -> str:
+async def save_upload(file: UploadFile, company_id: str, kind: str) -> str:
     data = bytearray()
     while chunk := await file.read(1024 * 1024):
         data.extend(chunk)
@@ -142,6 +206,16 @@ async def save_upload(file: UploadFile, company_id: UUID, kind: str) -> str:
     key = f"{company_id}/{kind}-{uuid4().hex}{EXTENSIONS[content_type]}"
     await get_storage().put(key, bytes(data), content_type)
     return key
+
+
+async def discard(keys: list[str]) -> None:
+    """Best-effort removal of images that ended up not belonging to any record."""
+    storage = get_storage()
+    for key in keys:
+        try:
+            await storage.delete(key)
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not delete orphaned image %s", key)
 
 
 def public_url(path: str | None) -> str | None:

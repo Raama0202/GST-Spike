@@ -11,8 +11,8 @@ class GstExpenseAdminApp extends ConsumerWidget {
     title: AppConstants.appName,
     debugShowCheckedModeBanner: false,
     theme: AdminTheme.light,
-    darkTheme: AdminTheme.light,
-    themeMode: ThemeMode.light,
+    darkTheme: AdminTheme.dark,
+    themeMode: ThemeMode.system,
     routerConfig: ref.watch(routerProvider),
   );
 }

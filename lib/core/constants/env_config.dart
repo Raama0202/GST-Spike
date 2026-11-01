@@ -36,6 +36,16 @@ class EnvConfig {
     defaultValue: false,
   );
 
+  static const String privacyUrl = String.fromEnvironment(
+    'PRIVACY_URL',
+    defaultValue: 'https://gst-admin-console.onrender.com/#/privacy',
+  );
+
+  static const String termsUrl = String.fromEnvironment(
+    'TERMS_URL',
+    defaultValue: 'https://gst-admin-console.onrender.com/#/terms',
+  );
+
   static bool get isProduction => env == 'production';
 
   static List<String> get certificatePins => pinSha256Csv

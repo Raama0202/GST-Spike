@@ -1,5 +1,6 @@
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
+import '../../../shared/models/company_identity.dart';
 import '../../../shared/models/invoice_entity.dart';
 
 /// Parsed OCR output with field-level confidence.
@@ -16,11 +17,33 @@ class GstParseResult {
 }
 
 /// Heuristic parser for Indian GST invoice OCR text.
+///
+/// A GST bill names two businesses: the supplier and the buyer (normally the
+/// company scanning it). With a [CompanyIdentity], the company's own GSTINs
+/// and names are never returned as the vendor.
 class GstInvoiceParser {
   GstInvoiceParser();
 
   static final RegExp _gstinPattern = RegExp(
-    r'\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b',
+    r'([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])',
+    caseSensitive: false,
+  );
+
+  /// Lines that open the recipient's block on a bill.
+  static final RegExp _buyerLabel = RegExp(
+    r'\b(bill(ed)?\s*to|buyer|customer|consignee|ship(ped)?\s*to|receiver|recipient|sold\s*to|party\s*(name|details))\b',
+    caseSensitive: false,
+  );
+
+  /// Lines that open the supplier's block (ends a recipient block).
+  static final RegExp _sellerLabel = RegExp(
+    r'\b(seller|supplier|sold\s*by|details\s*of\s*supplier|issued\s*by)\b',
+    caseSensitive: false,
+  );
+
+  /// Line items, totals and bank details end the party blocks.
+  static final RegExp _bodyLabel = RegExp(
+    r'\b(hsn|sac|qty|quantity|description|particulars|s\.?\s*no|sl\.?\s*no|total|bank)\b',
     caseSensitive: false,
   );
 
@@ -34,9 +57,16 @@ class GstInvoiceParser {
     caseSensitive: false,
   );
 
-  GstParseResult parse(RecognizedText recognizedText) {
+  GstParseResult parse(
+    RecognizedText recognizedText, {
+    CompanyIdentity? identity,
+  }) {
     final lines = _collectLines(recognizedText);
-    final parsed = parseRawText(recognizedText.text, lines: lines);
+    final parsed = parseRawText(
+      recognizedText.text,
+      lines: lines,
+      identity: identity,
+    );
     final confidence = _computeConfidence(
       data: parsed.data,
       recognizedText: recognizedText,
@@ -49,7 +79,12 @@ class GstInvoiceParser {
   }
 
   /// Text-only entry used by unit tests and fallback paths without ML Kit blocks.
-  GstParseResult parseRawText(String rawText, {List<String>? lines}) {
+  GstParseResult parseRawText(
+    String rawText, {
+    List<String>? lines,
+    CompanyIdentity? identity,
+  }) {
+    final own = identity ?? CompanyIdentity.empty;
     final normalized = rawText.replaceAll('\r', '\n');
     final resolvedLines = lines ??
         normalized
@@ -58,7 +93,8 @@ class GstInvoiceParser {
             .where((line) => line.isNotEmpty)
             .toList();
 
-    final gstin = _extractGstin(normalized);
+    final buyerLines = _buyerSectionLines(resolvedLines);
+    final gstin = _extractVendorGstin(resolvedLines, buyerLines, own);
     final invoiceNumber = _extractInvoiceNumber(normalized, resolvedLines);
     final invoiceDate = _extractInvoiceDate(normalized);
     final taxableValue = _extractLabeledAmount(
@@ -70,7 +106,8 @@ class GstInvoiceParser {
     final discount =
         _extractLabeledAmount(normalized, const ['DISCOUNT', 'LESS DISCOUNT']);
     final netAmount = _extractNetAmount(normalized);
-    final vendorName = _extractVendorName(resolvedLines, gstin);
+    final vendorName =
+        _extractVendorName(resolvedLines, buyerLines, gstin, own);
 
     final data = InvoiceFieldData(
       vendorName: vendorName,
@@ -127,9 +164,57 @@ class GstInvoiceParser {
     return lines;
   }
 
-  String? _extractGstin(String text) {
-    final match = _gstinPattern.firstMatch(text.replaceAll(' ', ''));
-    return match?.group(1)?.toUpperCase();
+  /// Indexes of lines inside a "Bill to / Buyer / Consignee" block. A block
+  /// ends after its GSTIN line, at the next heading, or after a few lines.
+  Set<int> _buyerSectionLines(List<String> lines) {
+    const maxBlockLines = 5;
+    final result = <int>{};
+    var blockLines = 0;
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (_sellerLabel.hasMatch(line) ||
+          _bodyLabel.hasMatch(line) ||
+          _headerNoise.hasMatch(line)) {
+        blockLines = 0;
+        continue;
+      }
+      if (_buyerLabel.hasMatch(line)) blockLines = maxBlockLines;
+      if (blockLines == 0) continue;
+      result.add(i);
+      blockLines--;
+      if (_gstinPattern.hasMatch(line.replaceAll(' ', ''))) blockLines = 0;
+    }
+    return result;
+  }
+
+  /// The supplier's GSTIN: never one of the company's own; a GSTIN outside
+  /// the buyer block wins over one inside it; a GSTIN that only shares the
+  /// company's PAN (its branch in another state) is the last resort.
+  String? _extractVendorGstin(
+    List<String> lines,
+    Set<int> buyerLines,
+    CompanyIdentity own,
+  ) {
+    final candidates = <({String gstin, int rank})>[];
+    final seen = <String>{};
+    for (var i = 0; i < lines.length; i++) {
+      final compact = lines[i].replaceAll(' ', '');
+      for (final match in _gstinPattern.allMatches(compact)) {
+        final gstin = match.group(1)!.toUpperCase();
+        if (!seen.add(gstin)) continue;
+        final relation = own.gstinMatch(gstin);
+        if (relation == GstinMatch.exact) continue;
+        final rank = (relation == GstinMatch.samePan ? 2 : 0) +
+            (buyerLines.contains(i) ? 1 : 0);
+        candidates.add((gstin: gstin, rank: rank));
+      }
+    }
+    if (candidates.isEmpty) return null;
+    var best = candidates.first;
+    for (final candidate in candidates.skip(1)) {
+      if (candidate.rank < best.rank) best = candidate;
+    }
+    return best.gstin;
   }
 
   String? _extractInvoiceNumber(String text, List<String> lines) {
@@ -223,6 +308,7 @@ class GstInvoiceParser {
   double? _extractNetAmount(String text) {
     final labels = [
       'GRAND TOTAL',
+      'INVOICE VALUE',
       'NET AMOUNT',
       'TOTAL AMOUNT',
       'AMOUNT PAYABLE',
@@ -246,26 +332,55 @@ class GstInvoiceParser {
     return double.tryParse(cleaned);
   }
 
-  String? _extractVendorName(List<String> lines, String? gstin) {
-    for (final line in lines.take(8)) {
-      final lower = line.toLowerCase();
-      if (lower.contains('tax invoice') ||
-          lower.contains('invoice') && lower.length < 14 ||
-          lower.startsWith('gstin') ||
-          lower.startsWith('date')) {
-        continue;
-      }
-      if (line.length >= 3 && line.length <= 80) {
-        return line;
-      }
+  static final RegExp _headerNoise = RegExp(
+    r'^(tax\s*invoice|invoice|bill\s*of\s*supply|cash\s*(memo|bill)|credit\s*bill|retail\s*invoice|estimate|original|duplicate|triplicate|for\s*recipient)\b',
+    caseSensitive: false,
+  );
+
+  bool _isNameCandidate(String line, CompanyIdentity own) {
+    final lower = line.toLowerCase();
+    if (line.length < 3 || line.length > 80) return false;
+    if (RegExp('[a-z]', caseSensitive: false).allMatches(line).length < 3) {
+      return false;
+    }
+    if (_headerNoise.hasMatch(lower) && line.length < 30) return false;
+    if (lower.contains('tax invoice') ||
+        lower.contains('gstin') ||
+        lower.startsWith('date') ||
+        lower.startsWith('to ') ||
+        lower.startsWith('to,') ||
+        lower.startsWith('to:') ||
+        RegExp(r'\b(ph|phone|mob|mobile|cell|email|e-mail|tel|irn|ack)\b|\b(pan|cin)\s*(no|:)')
+            .hasMatch(lower) ||
+        _buyerLabel.hasMatch(line) ||
+        _sellerLabel.hasMatch(line) ||
+        _bodyLabel.hasMatch(line)) {
+      return false;
+    }
+    return !own.ownsName(line);
+  }
+
+  String? _extractVendorName(
+    List<String> lines,
+    Set<int> buyerLines,
+    String? gstin,
+    CompanyIdentity own,
+  ) {
+    // The supplier's name is printed in the bill header.
+    for (var i = 0; i < lines.length && i < 8; i++) {
+      if (buyerLines.contains(i)) continue;
+      if (_isNameCandidate(lines[i], own)) return lines[i];
     }
 
+    // Otherwise the name usually sits just above (or below) its GSTIN.
     if (gstin != null) {
-      for (final line in lines) {
-        if (line.toUpperCase().contains(gstin)) continue;
-        if (RegExp(r'^[A-Za-z0-9 &.,\-]+$').hasMatch(line) &&
-            line.length >= 3) {
-          return line;
+      final at = lines.indexWhere(
+        (line) => line.replaceAll(' ', '').toUpperCase().contains(gstin),
+      );
+      if (at >= 0) {
+        for (final i in [at - 1, at - 2, at + 1]) {
+          if (i < 0 || i >= lines.length) continue;
+          if (_isNameCandidate(lines[i], own)) return lines[i];
         }
       }
     }

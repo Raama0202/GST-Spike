@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Pencil, Plus, Tags, Trash2, Users } from 'lucide-react'
+import { Building2, Pencil, Plus, Tags, Trash2, Users } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Items, Plan } from '../../api/types'
 import {
@@ -55,7 +55,15 @@ export default function Plans() {
                 </div>
                 <div className="actions">
                   <button className="btn sm icon" title="Edit" aria-label={`Edit ${p.name}`} onClick={() => setEditing(p)}><Pencil size={14} /></button>
-                  <button className="btn sm icon danger" title="Delete" aria-label={`Delete ${p.name}`} onClick={() => setDeleting(p)}><Trash2 size={14} /></button>
+                  <button
+                    className="btn sm icon danger"
+                    title={p.subscriberCount ? `In use by ${p.subscriberCount} compan${p.subscriberCount === 1 ? 'y' : 'ies'}; move them to another plan first` : 'Delete'}
+                    aria-label={`Delete ${p.name}`}
+                    disabled={Boolean(p.subscriberCount)}
+                    onClick={() => setDeleting(p)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
                 </div>
               </div>
               <div>
@@ -63,6 +71,9 @@ export default function Plans() {
                 <span className="faint"> / month</span>
               </div>
               <div className="row muted"><Users size={15} /> {p.maxEmployees ? `Up to ${p.maxEmployees} employees` : 'Unlimited employees'}</div>
+              {p.subscriberCount !== undefined && (
+                <div className="row muted"><Building2 size={15} /> {p.subscriberCount ? `${p.subscriberCount} subscribed compan${p.subscriberCount === 1 ? 'y' : 'ies'}` : 'No subscribers'}</div>
+              )}
               <div className="row wrap" style={{ gap: 6 }}>
                 {Object.entries(p.features ?? {}).filter(([, v]) => v).map(([k]) => (
                   <span key={k} className="badge blue" style={{ textTransform: 'none' }}>{KNOWN_FEATURES.find((f) => f.key === k)?.label ?? k}</span>
@@ -78,7 +89,7 @@ export default function Plans() {
       {deleting && (
         <Confirm
           title={`Delete ${deleting.name}?`}
-          message="Plans already assigned to a company subscription cannot be deleted."
+          message="The plan is removed from the catalogue. This cannot be undone."
           confirmLabel="Delete plan"
           danger
           busy={busy}
@@ -101,14 +112,23 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Plan | null; onClose: ()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const normalizedCode = code.trim().toLowerCase()
+  const codeOk = /^[a-z0-9][a-z0-9_-]{1,39}$/.test(normalizedCode)
+  const seatCount = Number(seats)
+  const valid = (plan !== null || codeOk) && name.trim() && price !== '' && Number(price) >= 0 && (unlimited || (Number.isInteger(seatCount) && seatCount > 0))
+  const dirty = plan
+    ? name !== plan.name || price !== String(plan.monthlyPriceInr) || unlimited !== (plan.maxEmployees === null)
+      || (!unlimited && seats !== String(plan.maxEmployees ?? 10)) || JSON.stringify(features) !== JSON.stringify(plan.features ?? {})
+    : Boolean(code || name || price)
+
   async function save() {
     setBusy(true)
     setError(null)
     const body = {
-      code: code.trim().toLowerCase(),
+      code: plan ? plan.code : normalizedCode,
       name: name.trim(),
       monthlyPriceInr: Number(price),
-      maxEmployees: unlimited ? null : Number(seats),
+      maxEmployees: unlimited ? null : seatCount,
       features,
     }
     try {
@@ -119,21 +139,21 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Plan | null; onClose: ()
       onClose()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save plan')
-    } finally {
       setBusy(false)
     }
   }
 
-  const valid = code.trim() && name.trim() && price !== '' && Number(price) >= 0 && (unlimited || Number(seats) > 0)
-
   return (
     <Modal
       title={plan ? `Edit ${plan.name}` : 'New plan'}
+      subtitle={plan?.subscriberCount ? `${plan.subscriberCount} compan${plan.subscriberCount === 1 ? 'y is' : 'ies are'} on this plan. Price changes apply to their next renewal.` : undefined}
       onClose={onClose}
+      busy={busy}
+      dirty={dirty}
       footer={
         <>
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={!valid || busy} onClick={save}>{busy && <Spinner small />} Save plan</button>
+          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn primary" disabled={!valid || busy || (plan !== null && !dirty)} onClick={save}>{busy && <Spinner small />} Save plan</button>
         </>
       }
     >
@@ -141,8 +161,18 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Plan | null; onClose: ()
         {error && <Alert kind="error">{error}</Alert>}
         <div className="form-grid">
           <Field label="Plan name"><input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Growth" autoFocus /></Field>
-          <Field label="Code" hint="unique, lowercase"><input className="input mono" value={code} onChange={(e) => setCode(e.target.value)} placeholder="growth" /></Field>
-          <Field label="Monthly price (₹)"><input className="input" type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} /></Field>
+          <Field label="Code" hint={plan ? "can't be changed" : 'unique, lowercase, a–z 0–9 - _'}>
+            <input
+              className="input mono"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="growth"
+              readOnly={Boolean(plan)}
+              disabled={Boolean(plan)}
+              aria-invalid={!plan && Boolean(code) && !codeOk}
+            />
+          </Field>
+          <Field label="Monthly price (₹)"><input className="input" type="number" min={0} step="1" value={price} onChange={(e) => setPrice(e.target.value)} /></Field>
           <Field label="Seat limit">
             <input className="input" type="number" min={1} value={unlimited ? '' : seats} disabled={unlimited} placeholder={unlimited ? 'Unlimited' : ''} onChange={(e) => setSeats(e.target.value)} />
           </Field>

@@ -1,24 +1,32 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { BellRing, CheckCircle2, Download, FileSpreadsheet, Mail, MessageCircle, Phone, RefreshCw, Scale, Upload } from 'lucide-react'
+import { BellRing, CheckCircle2, Download, FileSpreadsheet, Phone, RefreshCw, Scale, Trash2, Upload } from 'lucide-react'
 import { api } from '../../api/client'
 import type { ItcImport, ItcMatch, Items, Reminder, ReminderResult } from '../../api/types'
-import { Alert, Badge, Card, Empty, ErrorState, Field, Loading, Modal, PageHeader, Spinner, Stat, useAsync, useToast } from '../../components/ui'
+import {
+  Alert, Badge, Card, Confirm, Empty, ErrorState, Field, Loading, PageHeader, Pagination, Spinner, Stat, useAsync, usePaged, useToast,
+} from '../../components/ui'
 import { currentPeriod, date, downloadText, money } from '../../lib/format'
+import { FollowUpItem, ImportDialog, RemindersDialog, type GstrReturn } from './ItcParts'
 
 const MATCH_FILTERS = [
   ['', 'All'], ['matched', 'Matched'], ['partial', 'Partial'], ['mismatch', 'Mismatch'],
   ['missing_in_2b', 'Missing in GSTR'], ['missing_in_books', 'Missing in books'],
 ] as const
+const MATCHES_PER_PAGE = 100
+const POLL_MS = 5000
 
 export default function Itc() {
   const toast = useToast()
   const [period, setPeriod] = useState(currentPeriod())
-  const [returnType, setReturnType] = useState<'2A' | '2B'>('2B')
+  const [returnType, setReturnType] = useState<GstrReturn>('2B')
   const [status, setStatus] = useState('')
   const [importing, setImporting] = useState(false)
-  const [reminders, setReminders] = useState<ReminderResult[] | null>(null)
+  const [confirmRemindAll, setConfirmRemindAll] = useState(false)
+  const [removingImport, setRemovingImport] = useState<ItcImport | null>(null)
+  const [reminders, setReminders] = useState<{ items: ReminderResult[]; skipped?: number } | null>(null)
   const [working, setWorking] = useState<string | null>(null)
+  const [matchPage, setMatchPage] = usePaged(`${period}|${returnType}|${status}`)
 
   const info = useAsync(() => api<{ portalApiConfigured: boolean }>('/admin/itc/status'))
   const summary = useAsync(
@@ -33,6 +41,25 @@ export default function Itc() {
   const followUps = useAsync(() => api<Items<Reminder>>('/admin/itc/reminders', { query: { status: 'manual_followup' } }).then((r) => r.items))
 
   const refreshAll = () => { void summary.reload(); void matches.reload(); void imports.reload(); void followUps.reload() }
+  const refreshRef = useRef(refreshAll)
+  refreshRef.current = refreshAll
+
+  const processing = imports.data?.some((i) => i.status === 'processing') ?? false
+  const wasProcessing = useRef(false)
+  useEffect(() => {
+    if (!processing) {
+      if (wasProcessing.current) {
+        wasProcessing.current = false
+        toast('Background import finished')
+        refreshRef.current()
+      }
+      return
+    }
+    wasProcessing.current = true
+    const timer = setInterval(() => void imports.reload(), POLL_MS)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [processing])
 
   async function run(key: string, fn: () => Promise<void>) {
     setWorking(key)
@@ -51,15 +78,16 @@ export default function Itc() {
   })
 
   const remindAll = () => run('remindAll', async () => {
-    const res = await api<{ count: number; items: ReminderResult[] }>('/admin/itc/remind-missing', { method: 'POST', query: { period, returnType } })
-    if (!res.count) toast('No missing or mismatched invoices need reminders', 'info')
-    else setReminders(res.items)
+    const res = await api<{ count: number; skipped?: number; items: ReminderResult[] }>('/admin/itc/remind-missing', { method: 'POST', query: { period, returnType } })
+    setConfirmRemindAll(false)
+    if (!res.count) toast(res.skipped ? `All ${res.skipped} suppliers already have an open reminder` : 'No missing or mismatched invoices need reminders', 'info')
+    else setReminders({ items: res.items, skipped: res.skipped })
     void followUps.reload()
   })
 
   const remindOne = (id: string) => run(`remind-${id}`, async () => {
     const res = await api<ReminderResult>(`/admin/itc/matches/${id}/remind`, { method: 'POST' })
-    setReminders([res])
+    setReminders({ items: [res] })
     void followUps.reload()
   })
 
@@ -69,8 +97,19 @@ export default function Itc() {
     await followUps.reload()
   })
 
+  const removeImport = () => run('removeImport', async () => {
+    if (!removingImport) return
+    await api(`/admin/itc/imports/${removingImport.id}`, { method: 'DELETE' })
+    await api('/admin/itc/reconcile', { method: 'POST', query: { period, returnType } }).catch(() => {})
+    toast('Import removed and matches recalculated')
+    setRemovingImport(null)
+    refreshAll()
+  })
+
   const counts = summary.data ?? {}
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
+  const rows = matches.data?.slice((matchPage - 1) * MATCHES_PER_PAGE, matchPage * MATCHES_PER_PAGE) ?? []
+  const toChase = (counts.missing_in_2b ?? 0) + (counts.mismatch ?? 0)
 
   return (
     <>
@@ -91,9 +130,11 @@ export default function Itc() {
               <Field label="Return period">
                 <input className="input" type="month" value={period} onChange={(e) => e.target.value && setPeriod(e.target.value)} style={{ width: 190 }} />
               </Field>
-              <Field label="Return type">
+              <Field label="Return type" group>
                 <div className="segmented">
-                  {(['2B', '2A'] as const).map((t) => <button key={t} className={returnType === t ? 'on' : ''} onClick={() => setReturnType(t)}>GSTR-{t}</button>)}
+                  {(['2B', '2A'] as const).map((t) => (
+                    <button key={t} className={returnType === t ? 'on' : ''} aria-pressed={returnType === t} onClick={() => setReturnType(t)}>GSTR-{t}</button>
+                  ))}
                 </div>
               </Field>
             </div>
@@ -103,6 +144,11 @@ export default function Itc() {
               </Alert>
             )}
           </div>
+          {processing && (
+            <div style={{ marginTop: 14 }}>
+              <Alert kind="info"><span className="row" style={{ gap: 8 }}><Spinner small /> A large file is importing in the background. Results refresh automatically.</span></Alert>
+            </div>
+          )}
         </Card>
 
         <div className="grid cols-4">
@@ -118,13 +164,13 @@ export default function Itc() {
           actions={
             <>
               <button className="btn sm" onClick={exportCsv} disabled={working === 'export'}>{working === 'export' ? <Spinner small /> : <Download size={14} />} Export CSV</button>
-              <button className="btn sm warn" onClick={remindAll} disabled={working === 'remindAll'}>{working === 'remindAll' ? <Spinner small /> : <BellRing size={14} />} Remind all missing</button>
+              <button className="btn sm warn" onClick={() => setConfirmRemindAll(true)} disabled={!toChase}><BellRing size={14} /> Remind all missing</button>
             </>
           }
         >
-          <div className="segmented" style={{ marginBottom: 14, flexWrap: 'wrap' }}>
+          <div className="segmented" role="group" aria-label="Match status" style={{ marginBottom: 14, flexWrap: 'wrap' }}>
             {MATCH_FILTERS.map(([k, label]) => (
-              <button key={k} className={status === k ? 'on' : ''} onClick={() => setStatus(k)}>
+              <button key={k} className={status === k ? 'on' : ''} aria-pressed={status === k} onClick={() => setStatus(k)}>
                 {label}{k && counts[k] ? <span className="count">{counts[k]}</span> : null}
               </button>
             ))}
@@ -132,42 +178,45 @@ export default function Itc() {
           {matches.loading && !matches.data ? <Loading /> : matches.error ? <ErrorState message={matches.error} onRetry={matches.reload} /> : !matches.data?.length ? (
             <Empty icon={<Scale size={24} />} title="No match results for this period" message="Import the GSTR file for this period, then results appear here." />
           ) : (
-            <div className="table-wrap">
-              <table className="table">
-                <thead><tr><th>Status</th><th>Your books</th><th>GSTR portal</th><th>Difference</th><th className="right">Action</th></tr></thead>
-                <tbody>
-                  {matches.data.map((m) => (
-                    <tr key={m.id}>
-                      <td><Badge status={m.status} /></td>
-                      <td>
-                        {m.invoice ? (
-                          <Link to={`/invoices/${m.invoice.id}`}>
-                            <div className="cell-title" style={{ color: 'var(--text)' }}>{m.invoice.vendorName || 'Unknown vendor'}</div>
-                            <div className="cell-sub mono">{m.invoice.invoiceNumber} · {money(m.invoice.netAmount)}</div>
-                          </Link>
-                        ) : <span className="faint">Not in books</span>}
-                      </td>
-                      <td>
-                        {m.portalRow ? (
-                          <>
-                            <div className="cell-title">{m.portalRow.supplierName || m.portalRow.supplierGstin}</div>
-                            <div className="cell-sub mono">{m.portalRow.invoiceNumber} · {money(m.portalRow.netAmount)}</div>
-                          </>
-                        ) : <span className="faint">Not filed by supplier</span>}
-                      </td>
-                      <td className="nowrap">{m.amountDelta ? money(m.amountDelta) : '—'}{m.notes && <div className="cell-sub">{m.notes}</div>}</td>
-                      <td className="right">
-                        {m.invoice && (m.status === 'missing_in_2b' || m.status === 'mismatch') && (
-                          <button className="btn sm" onClick={() => remindOne(m.id)} disabled={working === `remind-${m.id}`}>
-                            {working === `remind-${m.id}` ? <Spinner small /> : <BellRing size={14} />} Remind
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead><tr><th>Status</th><th>Your books</th><th>GSTR portal</th><th>Difference</th><th className="right">Action</th></tr></thead>
+                  <tbody>
+                    {rows.map((m) => (
+                      <tr key={m.id}>
+                        <td><Badge status={m.status} /></td>
+                        <td>
+                          {m.invoice ? (
+                            <Link to={`/invoices/${m.invoice.id}`}>
+                              <div className="cell-title" style={{ color: 'var(--text)' }}>{m.invoice.vendorName || 'Unknown vendor'}</div>
+                              <div className="cell-sub mono">{m.invoice.invoiceNumber} · {money(m.invoice.netAmount)}</div>
+                            </Link>
+                          ) : <span className="faint">Not in books</span>}
+                        </td>
+                        <td>
+                          {m.portalRow ? (
+                            <>
+                              <div className="cell-title">{m.portalRow.supplierName || m.portalRow.supplierGstin}</div>
+                              <div className="cell-sub mono">{m.portalRow.invoiceNumber} · {money(m.portalRow.netAmount)}</div>
+                            </>
+                          ) : <span className="faint">Not filed by supplier</span>}
+                        </td>
+                        <td className="nowrap">{m.amountDelta ? money(m.amountDelta) : '—'}{m.notes && <div className="cell-sub">{m.notes}</div>}</td>
+                        <td className="right">
+                          {m.invoice && (m.status === 'missing_in_2b' || m.status === 'mismatch') && (
+                            <button className="btn sm" onClick={() => remindOne(m.id)} disabled={working === `remind-${m.id}`}>
+                              {working === `remind-${m.id}` ? <Spinner small /> : <BellRing size={14} />} Remind
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Pagination page={matchPage} pageSize={MATCHES_PER_PAGE} total={matches.data.length} onPage={setMatchPage} />
+            </>
           )}
         </Card>
 
@@ -177,26 +226,7 @@ export default function Itc() {
               <Empty icon={<Phone size={24} />} title="No pending follow-ups" />
             ) : (
               followUps.data.map((r) => (
-                <div key={r.id} className="list-item">
-                  <div className="dot-icon"><Phone size={16} /></div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="muted" style={{ fontSize: 13 }}>{r.messagePreview}</div>
-                    <div className="row wrap" style={{ marginTop: 8 }}>
-                      <button className={`btn sm ${r.called ? 'success' : ''}`} onClick={() => updateFollowUp(r.id, { called: !r.called }, r.called ? 'Marked as not called' : 'Marked as called')}>
-                        {r.called ? <CheckCircle2 size={14} /> : <Phone size={14} />} {r.called ? 'Called' : 'Mark called'}
-                      </button>
-                      <input
-                        className="input" type="date" style={{ width: 160, height: 32 }}
-                        value={r.promisedBy ?? ''}
-                        onChange={(e) => e.target.value && updateFollowUp(r.id, { promisedBy: e.target.value }, 'Promise date saved')}
-                        aria-label="Supplier promised filing by"
-                        title="Supplier promised to file by"
-                      />
-                      <button className="btn sm success" onClick={() => updateFollowUp(r.id, { resolved: true }, 'Follow-up resolved')}>Resolve</button>
-                      <Link className="btn sm ghost" to={`/invoices/${r.invoiceId}`}>Invoice</Link>
-                    </div>
-                  </div>
-                </div>
+                <FollowUpItem key={r.id} reminder={r} busy={working === `fu-${r.id}`} onUpdate={(body, message) => updateFollowUp(r.id, body, message)} />
               ))
             )}
           </Card>
@@ -207,12 +237,17 @@ export default function Itc() {
               imports.data.map((i) => (
                 <div key={i.id} className="list-item">
                   <div className="dot-icon"><FileSpreadsheet size={16} /></div>
-                  <div style={{ flex: 1 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="row between">
-                      <div className="cell-title">{i.originalFilename || 'GSTR file'}</div>
-                      <Badge status={i.status} />
+                      <div className="cell-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{i.originalFilename || 'GSTR file'}</div>
+                      <div className="row" style={{ gap: 6 }}>
+                        <Badge status={i.status} />
+                        {i.status !== 'processing' && (
+                          <button className="btn ghost icon sm" title="Remove this import" aria-label={`Remove import ${i.originalFilename ?? ''}`} onClick={() => setRemovingImport(i)}><Trash2 size={14} /></button>
+                        )}
+                      </div>
                     </div>
-                    <div className="cell-sub">GSTR-{i.returnType} · {i.rowCount} rows · {date(i.createdAt, true)}</div>
+                    <div className="cell-sub">GSTR-{i.returnType} · {i.rowCount.toLocaleString('en-IN')} rows · {date(i.createdAt, true)}</div>
                     {i.errorMessage && <div className="cell-sub" style={{ color: 'var(--danger)' }}>{i.errorMessage}</div>}
                   </div>
                 </div>
@@ -223,105 +258,43 @@ export default function Itc() {
       </div>
 
       {importing && (
-        <ImportDialog period={period} returnType={returnType} onClose={() => setImporting(false)} onDone={() => { setImporting(false); refreshAll() }} />
+        <ImportDialog
+          period={period}
+          returnType={returnType}
+          onClose={() => setImporting(false)}
+          onDone={(p, rt) => {
+            setImporting(false)
+            if (p !== period || rt !== returnType) {
+              setPeriod(p)
+              setReturnType(rt)
+            } else {
+              refreshAll()
+            }
+          }}
+        />
       )}
-      {reminders && <RemindersDialog items={reminders} onClose={() => setReminders(null)} />}
+      {confirmRemindAll && (
+        <Confirm
+          title="Remind all suppliers?"
+          message={`Creates a reminder for each of the ${toChase} missing or mismatched invoices in GSTR-${returnType} ${period}. Suppliers that already have an open reminder are skipped.`}
+          confirmLabel="Prepare reminders"
+          busy={working === 'remindAll'}
+          onConfirm={remindAll}
+          onClose={() => setConfirmRemindAll(false)}
+        />
+      )}
+      {removingImport && (
+        <Confirm
+          title="Remove this import?"
+          message={`Deletes the ${removingImport.rowCount.toLocaleString('en-IN')} rows from ${removingImport.originalFilename || 'this file'} and recalculates matches for ${period}.`}
+          confirmLabel="Remove import"
+          danger
+          busy={working === 'removeImport'}
+          onConfirm={removeImport}
+          onClose={() => setRemovingImport(null)}
+        />
+      )}
+      {reminders && <RemindersDialog items={reminders.items} skipped={reminders.skipped} onClose={() => setReminders(null)} />}
     </>
-  )
-}
-
-function ImportDialog({ period, returnType, onClose, onDone }: { period: string; returnType: '2A' | '2B'; onClose: () => void; onDone: () => void }) {
-  const toast = useToast()
-  const fileRef = useRef<HTMLInputElement>(null)
-  const [file, setFile] = useState<File | null>(null)
-  const [p, setP] = useState(period)
-  const [rt, setRt] = useState(returnType)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  async function upload() {
-    if (!file) return
-    setBusy(true)
-    setError(null)
-    const form = new FormData()
-    form.append('period', p)
-    form.append('returnType', rt)
-    form.append('file', file)
-    try {
-      const res = await api<{ rowCount: number; status?: string; matchCounts: Record<string, number> | null }>('/admin/itc/import', { method: 'POST', body: form })
-      if (res.status === 'processing') {
-        toast(`Large file: ${res.rowCount.toLocaleString('en-IN')} rows are being imported in the background. Refresh in a minute.`, 'info')
-      } else {
-        toast(`Imported ${res.rowCount.toLocaleString('en-IN')} rows and reconciled`)
-      }
-      onDone()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Import failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Modal
-      title="Import GSTR file"
-      subtitle="Excel (.xlsx) or CSV exported from the GST portal. Matching runs automatically."
-      onClose={onClose}
-      footer={
-        <>
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={!file || busy} onClick={upload}>{busy ? <Spinner small /> : <Upload size={16} />} Import</button>
-        </>
-      }
-    >
-      <div className="stack">
-        {error && <Alert kind="error">{error}</Alert>}
-        <div className="form-grid">
-          <Field label="Period"><input className="input" type="month" value={p} onChange={(e) => setP(e.target.value)} /></Field>
-          <Field label="Return type">
-            <select className="select" value={rt} onChange={(e) => setRt(e.target.value as '2A' | '2B')}>
-              <option value="2B">GSTR-2B</option>
-              <option value="2A">GSTR-2A</option>
-            </select>
-          </Field>
-        </div>
-        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-        <button
-          type="button"
-          className="glass"
-          onClick={() => fileRef.current?.click()}
-          style={{ padding: 28, textAlign: 'center', cursor: 'pointer', borderStyle: 'dashed', color: 'inherit' }}
-        >
-          <FileSpreadsheet size={28} style={{ color: 'var(--primary)' }} />
-          <div className="cell-title" style={{ marginTop: 8 }}>{file ? file.name : 'Choose a file'}</div>
-          <div className="faint">{file ? `${(file.size / 1024).toFixed(1)} KB` : '.xlsx, .xls or .csv'}</div>
-        </button>
-      </div>
-    </Modal>
-  )
-}
-
-function RemindersDialog({ items, onClose }: { items: ReminderResult[]; onClose: () => void }) {
-  return (
-    <Modal
-      title={items.length === 1 ? 'Supplier reminder ready' : `${items.length} supplier reminders ready`}
-      subtitle="Open WhatsApp or email to send. Suppliers without contact details were added to follow-ups."
-      onClose={onClose}
-      wide
-      footer={<button className="btn primary" onClick={onClose}>Done</button>}
-    >
-      <div className="stack">
-        {items.map((r) => (
-          <div key={r.id} className="glass card" style={{ padding: 16 }}>
-            <div className="muted" style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{r.message}</div>
-            <div className="row wrap" style={{ marginTop: 12 }}>
-              {r.whatsappUrl && <a className="btn sm success" href={r.whatsappUrl} target="_blank" rel="noreferrer"><MessageCircle size={14} /> WhatsApp</a>}
-              {r.mailtoUrl && <a className="btn sm" href={r.mailtoUrl}><Mail size={14} /> Email</a>}
-              {!r.whatsappUrl && !r.mailtoUrl && <Badge status="manual_followup" label="Manual follow-up" />}
-            </div>
-          </div>
-        ))}
-      </div>
-    </Modal>
   )
 }

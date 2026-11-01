@@ -16,6 +16,11 @@ class ApiEndpoints {
   static const String notifications = '/notifications';
   static const String markNotificationRead = '/notifications/read';
   static const String deviceRegister = '/devices/register';
+
+  static String invoiceById(String serverId) => '/invoices/$serverId';
+  static String invoiceResubmit(String serverId) =>
+      '/invoices/$serverId/resubmit';
+  static String device(String deviceId) => '/devices/$deviceId';
 }
 
 class StorageKeys {
@@ -53,7 +58,9 @@ class AppConstants {
   static const double blurVarianceThreshold = 80;
   static const double lowOcrConfidenceThreshold = 0.55;
   static const int syncMaxAttempts = 8;
-  static const Duration syncBaseBackoff = Duration(seconds: 2);
+  static const Duration syncBaseBackoff = Duration(seconds: 15);
+  static const Duration syncMaxBackoff = Duration(minutes: 30);
+  static const Duration duplicateCheckTimeout = Duration(seconds: 8);
   static const Duration tokenRefreshSkew = Duration(minutes: 2);
-  static const String appName = 'GST Expense Scanner';
+  static const String appName = 'GST Expense';
 }

@@ -33,7 +33,7 @@ if (Test-Path $envFile) {
     }
 }
 
-$env:DATABASE_URL = if ($env:DATABASE_URL) { $env:DATABASE_URL } else { "sqlite+aiosqlite:///./dev.db" }
+. (Join-Path $PSScriptRoot "local_mongo.ps1")
 $env:STORAGE_PATH = if ($env:STORAGE_PATH) { $env:STORAGE_PATH } else { "./uploads" }
 $env:ENV = if ($env:ENV) { $env:ENV } else { "dev" }
 $env:OTP_DEV_FIXED = if ($env:OTP_DEV_FIXED) { $env:OTP_DEV_FIXED } else { "123456" }
@@ -48,10 +48,8 @@ if (-not $env:GEMINI_API_KEY) {
     Write-Host "Gemini AI extraction enabled ($env:GEMINI_MODEL)" -ForegroundColor Green
 }
 
-if (-not (Test-Path "./dev.db")) {
-    Write-Host "Creating database and seed data..." -ForegroundColor Cyan
-    py dev_init.py
-}
+Write-Host "Preparing database and demo data..." -ForegroundColor Cyan
+py -m app.seed
 
 # Kill any previous API on 8000 so the tunnel always hits this process.
 Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue |

@@ -26,6 +26,16 @@ class ServerConfig {
   /// Host shown in the UI, e.g. `demo.trycloudflare.com`.
   static String get displayHost => Uri.tryParse(_baseUrl)?.host ?? _baseUrl;
 
+  /// The API returns signed media links either absolute (object storage) or
+  /// server-relative (`/v1/media/...`); the latter must be joined to the host.
+  static String? resolveMediaUrl(String? url) {
+    if (url == null || url.isEmpty) return null;
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    final base = Uri.tryParse(_baseUrl);
+    if (base == null || base.host.isEmpty) return null;
+    return base.resolve(url).toString();
+  }
+
   static Future<void> load(SecureStorageService storage) async {
     if (!canOverride) {
       _baseUrl = EnvConfig.apiBaseUrl;

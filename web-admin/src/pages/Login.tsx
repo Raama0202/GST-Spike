@@ -1,26 +1,60 @@
-import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { Building2, FileText, KeyRound, Lock, Mail, Scale, ShieldCheck, Smartphone } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Building2, FileText, KeyRound, Lock, Mail, Scale, ShieldCheck, Smartphone, UserPlus } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
-import { API_ORIGIN, api } from '../api/client'
-import { Alert, Field, Modal, Spinner, useToast } from '../components/ui'
+import { home, returnPath } from '../auth/paths'
+import { api } from '../api/client'
+import { Alert, Field, Modal, Spinner, useDocumentTitle, useToast } from '../components/ui'
+import { ForgotPasswordCard, RegisterCard, type RegistrationOptions } from './AuthFlows'
+import { PublicFooterLinks } from './public/links'
+
+type Mode = 'signin' | 'register' | 'forgot'
+
+const TITLES: Record<Mode, string> = { signin: 'Sign in', register: 'Register your firm', forgot: 'Reset password' }
 
 export default function Login() {
   const { login } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+  const toast = useToast()
+  const [mode, setMode] = useState<Mode>('signin')
+  useDocumentTitle(TITLES[mode])
+  const [options, setOptions] = useState<RegistrationOptions | null>(null)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [activating, setActivating] = useState(false)
+
+  useEffect(() => {
+    api<RegistrationOptions>('/admin/auth/register/options', { auth: false })
+      .then(setOptions)
+      .catch(() => setOptions(null))
+  }, [])
+
+  function registered() {
+    toast('Welcome! Your firm is set up. Next, add your GSTINs and employees.')
+    navigate('/settings', { replace: true })
+  }
+
+  function passwordFlowDone(nextEmail: string, reset: boolean) {
+    if (nextEmail) setEmail(nextEmail)
+    setPassword('')
+    setError(null)
+    setNotice(reset ? 'Password updated. Sign in with your new password.' : null)
+    setMode('signin')
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault()
     setBusy(true)
     setError(null)
+    setNotice(null)
     try {
       const session = await login(email, password)
-      navigate(session.role === 'super_admin' ? '/super/overview' : '/dashboard', { replace: true })
+      const from = session.billingRequired ? null : returnPath(location.state)
+      navigate(from ?? home(session.role, session.billingRequired), { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sign in failed')
     } finally {
@@ -60,54 +94,75 @@ export default function Login() {
             ))}
           </div>
         </div>
-        <div className="faint" style={{ fontSize: 12.5 }}>Connected to {new URL(API_ORIGIN).host}</div>
+        <div className="stack" style={{ gap: 8 }}>
+          <div className="faint" style={{ fontSize: 12.5 }}>Need help? <Link to="/contact">Contact us</Link> · <Link to="/pricing">See pricing</Link></div>
+          <PublicFooterLinks />
+        </div>
       </section>
 
       <section className="auth-panel">
-        <form className="glass auth-card stack" onSubmit={submit}>
-          <div>
-            <h2>Sign in</h2>
-            <div className="muted" style={{ marginTop: 4 }}>Super admins and company admins use the same sign-in.</div>
-          </div>
-          {error && <Alert kind="error">{error}</Alert>}
-          <Field label="Work email">
-            <div className="input-icon">
-              <Mail size={16} />
-              <input
-                className="input"
-                type="email"
-                autoComplete="username"
-                placeholder="you@company.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoFocus
-              />
+        {mode === 'register' && (
+          <RegisterCard options={options} onBack={() => setMode('signin')} onRegistered={registered} />
+        )}
+        {mode === 'forgot' && <ForgotPasswordCard initialEmail={email} onDone={passwordFlowDone} />}
+        {mode === 'signin' && (
+          <form className="glass auth-card stack" onSubmit={submit}>
+            <div>
+              <h2>Sign in</h2>
+              <div className="muted" style={{ marginTop: 4 }}>Super admins and company admins use the same sign-in.</div>
             </div>
-          </Field>
-          <Field label="Password">
-            <div className="input-icon">
-              <Lock size={16} />
-              <input
-                className="input"
-                type="password"
-                autoComplete="current-password"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-          </Field>
-          <button className="btn primary block" style={{ height: 44 }} disabled={busy}>
-            {busy ? <><Spinner small /> Signing in…</> : 'Sign in'}
-          </button>
-          {busy && <div className="faint" style={{ fontSize: 12, textAlign: 'center' }}>The server may take up to a minute to wake up.</div>}
-          <div className="divider">New company?</div>
-          <button type="button" className="btn block" onClick={() => setActivating(true)}>
-            <KeyRound size={16} /> Activate with a code
-          </button>
-        </form>
+            {notice && <Alert kind="success">{notice}</Alert>}
+            {error && <Alert kind="error">{error}</Alert>}
+            <Field label="Work email">
+              <div className="input-icon">
+                <Mail size={16} />
+                <input
+                  className="input"
+                  type="email"
+                  autoComplete="username"
+                  placeholder="you@company.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
+            </Field>
+            <Field label="Password">
+              <div className="input-icon">
+                <Lock size={16} />
+                <input
+                  className="input"
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+              </div>
+            </Field>
+            {options?.passwordReset !== false && (
+              <button type="button" className="btn ghost auth-forgot" onClick={() => { setError(null); setNotice(null); setMode('forgot') }}>
+                Forgot password?
+              </button>
+            )}
+            <button className="btn primary block" style={{ height: 44 }} disabled={busy}>
+              {busy ? <><Spinner small /> Signing in…</> : 'Sign in'}
+            </button>
+            {busy && <div className="faint" style={{ fontSize: 12, textAlign: 'center' }}>The server may take up to a minute to wake up.</div>}
+            <div className="divider">New company?</div>
+            {options?.enabled !== false && (
+              <button type="button" className="btn block" onClick={() => { setError(null); setNotice(null); setMode('register') }}>
+                <UserPlus size={16} /> Register your firm
+              </button>
+            )}
+            <button type="button" className="btn ghost block" onClick={() => setActivating(true)}>
+              <KeyRound size={16} /> Activate with a code
+            </button>
+          </form>
+        )}
+        <div className="auth-panel-links"><PublicFooterLinks /></div>
       </section>
 
       {activating && <ActivateDialog onClose={() => setActivating(false)} />}
@@ -140,9 +195,11 @@ function ActivateDialog({ onClose }: { onClose: () => void }) {
       title="Activate company"
       subtitle="Enter the activation code provided by your GST Expense administrator."
       onClose={onClose}
+      busy={busy}
+      dirty={Boolean(code.trim())}
       footer={
         <>
-          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
           <button className="btn primary" disabled={!code.trim() || busy} onClick={activate}>
             {busy && <Spinner small />} Activate
           </button>

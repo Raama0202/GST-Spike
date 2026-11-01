@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -8,6 +9,8 @@ import 'package:uuid/uuid.dart';
 import 'package:gst_expense_scanner/core/di/providers.dart';
 import 'package:gst_expense_scanner/core/errors/exceptions.dart';
 import 'package:gst_expense_scanner/core/errors/failures.dart';
+import 'package:gst_expense_scanner/core/storage/local_database.dart';
+import 'package:gst_expense_scanner/features/company_config/presentation/company_config_providers.dart';
 import 'package:gst_expense_scanner/features/ocr/data/ocr_service.dart';
 import 'package:gst_expense_scanner/features/review/presentation/providers/review_providers.dart';
 import 'package:gst_expense_scanner/shared/widgets/loading_overlay.dart';
@@ -27,6 +30,21 @@ class _ScanFlowScreenState extends ConsumerState<ScanFlowScreen> {
   String? _errorMessage;
   String? _statusMessage;
   bool _blurWarning = false;
+  String? _localId;
+  late final InvoiceImageStore _imageStore;
+
+  @override
+  void initState() {
+    super.initState();
+    _imageStore = ref.read(imageStoreProvider);
+  }
+
+  @override
+  void dispose() {
+    final localId = _localId;
+    if (localId != null) unawaited(_imageStore.deleteInvoiceFiles(localId));
+    super.dispose();
+  }
 
   Future<void> _capture({required bool fromGallery}) async {
     setState(() {
@@ -48,7 +66,9 @@ class _ScanFlowScreenState extends ConsumerState<ScanFlowScreen> {
         return;
       }
 
-      if (!await scanner.validateImagePath(path)) {
+      final valid = await scanner.validateImagePath(path);
+      if (!mounted) return;
+      if (!valid) {
         setState(() {
           _phase = _ScanPhase.error;
           _errorMessage = 'Selected image is not available. Please try again.';
@@ -66,8 +86,17 @@ class _ScanFlowScreenState extends ConsumerState<ScanFlowScreen> {
     }
   }
 
+  /// Drops the draft and the image files written for it, so abandoned scans
+  /// do not pile up in app storage.
+  void _discard(String? localId) {
+    if (localId == null) return;
+    if (_localId == localId) _localId = null;
+    unawaited(_imageStore.deleteInvoiceFiles(localId));
+  }
+
   Future<void> _processImage(String sourcePath) async {
     final localId = const Uuid().v4();
+    _localId = localId;
     ref.read(reviewDraftProvider.notifier).startCapture(sourcePath);
 
     setState(() => _statusMessage = 'Processing image…');
@@ -78,6 +107,10 @@ class _ScanFlowScreenState extends ConsumerState<ScanFlowScreen> {
         sourcePath: sourcePath,
         localId: localId,
       );
+      if (!mounted) {
+        _discard(localId);
+        return;
+      }
 
       ref.read(reviewDraftProvider.notifier).setProcessedImages(
             originalImagePath: processed.originalPath,
@@ -88,10 +121,14 @@ class _ScanFlowScreenState extends ConsumerState<ScanFlowScreen> {
           );
 
       if (processed.isBlurry) {
-        if (!mounted) return;
         final retake = await _showBlurDialog();
+        if (!mounted) {
+        _discard(localId);
+        return;
+      }
         if (retake) {
           ref.read(reviewDraftProvider.notifier).clear();
+          _discard(localId);
           setState(() => _phase = _ScanPhase.choose);
           return;
         }
@@ -103,19 +140,35 @@ class _ScanFlowScreenState extends ConsumerState<ScanFlowScreen> {
       final ocr = ref.read(ocrServiceProvider);
       OcrRunResult ocrResult;
       try {
-        ocrResult = await ocr.runOcr(processed.compressedPath);
+        // The full-quality image: the upload rendition can drop to JPEG
+        // quality 40 to fit 1 MB, which blurs handwriting.
+        ocrResult = await ocr.runOcr(
+          processed.originalPath,
+          identity: ref.read(activeCompanyConfigProvider)?.identity,
+        );
       } on AppException catch (e) {
-        if (!mounted) return;
+        if (!mounted) {
+        _discard(localId);
+        return;
+      }
         final retake = await _showOcrFailureDialog(_messageFrom(e));
+        if (!mounted) {
+        _discard(localId);
+        return;
+      }
         if (retake) {
           ref.read(reviewDraftProvider.notifier).clear();
+          _discard(localId);
           setState(() => _phase = _ScanPhase.choose);
           return;
         }
         rethrow;
       }
 
-      if (!mounted) return;
+      if (!mounted) {
+        _discard(localId);
+        return;
+      }
       setState(() {
         _statusMessage = ocrResult.source == OcrExtractionSource.ai
             ? 'AI extraction complete'
@@ -131,11 +184,13 @@ class _ScanFlowScreenState extends ConsumerState<ScanFlowScreen> {
           rawOcrText: ocrResult.rawText,
         );
 
-      if (!mounted) return;
-      context.go('/review');
+      // The review screen owns the files from here on.
+      _localId = null;
+      context.pushReplacement('/review');
     } catch (error) {
-      ref.read(reviewDraftProvider.notifier).clear();
+      _discard(localId);
       if (!mounted) return;
+      ref.read(reviewDraftProvider.notifier).clear();
       setState(() {
         _phase = _ScanPhase.error;
         _errorMessage = _messageFrom(error);
@@ -210,6 +265,7 @@ class _ScanFlowScreenState extends ConsumerState<ScanFlowScreen> {
           icon: const Icon(Icons.close),
           onPressed: () {
             ref.read(reviewDraftProvider.notifier).clear();
+            _discard(_localId);
             context.go('/home');
           },
         ),
@@ -240,6 +296,7 @@ class _ScanFlowScreenState extends ConsumerState<ScanFlowScreen> {
                     borderRadius: BorderRadius.circular(12),
                     child: Image.file(
                       File(previewPath),
+                      cacheWidth: 1080,
                       height: 180,
                       width: double.infinity,
                       fit: BoxFit.cover,

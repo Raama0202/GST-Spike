@@ -11,10 +11,23 @@ plugins {
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 val hasReleaseKey = keystorePropertiesFile.exists()
+val buildingRelease = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
 if (hasReleaseKey) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
-} else {
-    logger.warn("android/key.properties not found: release build is signed with the DEBUG key (testing only, not uploadable to Play).")
+} else if (buildingRelease) {
+    // CI sets REQUIRE_RELEASE_KEY=true so a store build can never ship debug-signed.
+    if (System.getenv("REQUIRE_RELEASE_KEY") == "true") {
+        throw GradleException("REQUIRE_RELEASE_KEY=true but android/key.properties is missing; refusing to sign a release with the debug key.")
+    }
+    logger.error(
+        """
+        |************************************************************************
+        |* android/key.properties NOT FOUND - this RELEASE build is signed with *
+        |* the DEBUG key. It installs for testing but Play will REJECT it.      *
+        |* Set REQUIRE_RELEASE_KEY=true in CI to turn this into a build error.  *
+        |************************************************************************
+        """.trimMargin()
+    )
 }
 
 android {
@@ -54,8 +67,10 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName(if (hasReleaseKey) "release" else "debug")
-            // R8 strips classes that plugins create by reflection (e.g. WorkManager's
-            // WorkDatabase_Impl), crashing the app on launch. Keep it off.
+            // R8 is intentionally OFF: it strips classes that plugins create by reflection
+            // (e.g. WorkManager's WorkDatabase_Impl), crashing the app on launch. The
+            // proguard-rules.pro (incl. ML Kit keeps) is only used if this is re-enabled;
+            // verify a release build cold-starts and runs background sync before doing so.
             isMinifyEnabled = false
             isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

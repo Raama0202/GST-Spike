@@ -92,4 +92,10 @@ key.properties
 
 # Local smoke-test databases
 backend/*.db*
+backend/.mongo/
 
+# Release outputs (scripts/build_release.ps1, scripts/build_ios.sh)
+deploy/android/*.apk
+deploy/ios/*.ipa
+deploy/SuperAdminPortal/app/
+build_release.log

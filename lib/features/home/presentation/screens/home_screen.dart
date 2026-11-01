@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:gst_expense_scanner/core/theme/glass.dart';
+import 'package:gst_expense_scanner/features/auth/presentation/providers/auth_providers.dart';
 import 'package:gst_expense_scanner/features/home/presentation/providers/home_providers.dart';
 import 'package:gst_expense_scanner/features/notifications/presentation/notification_providers.dart';
 import 'package:gst_expense_scanner/features/sync/presentation/sync_providers.dart';
@@ -21,11 +22,21 @@ class HomeScreen extends ConsumerWidget {
     final pendingSync = ref.watch(homePendingSyncCountProvider);
     final syncStatus = ref.watch(syncStatusProvider);
     final unread = ref.watch(unreadNotificationCountProvider);
+    final needsAttention = ref.watch(homeNeedsAttentionCountProvider);
     final syncing = syncStatus.state == SyncStatusView.syncing;
 
     return Scaffold(
       body: SafeArea(
-        child: ListView(
+        child: RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(notificationsListProvider);
+            await Future.wait([
+              ref.read(syncStatusProvider.notifier).syncNow(),
+              ref.read(authStateProvider.notifier).refreshCompanyConfig(),
+            ]);
+          },
+          child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(
             GlassMetrics.screenPadding,
             12,
@@ -131,6 +142,37 @@ class HomeScreen extends ConsumerWidget {
                 ),
               ),
             ],
+            if (needsAttention > 0) ...[
+              const SizedBox(height: 14),
+              GlassCard(
+                tint: Brand.warning,
+                padding: const EdgeInsets.all(14),
+                onTap: () => context.push('/uploads?filter=failed'),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.warning_amber_rounded,
+                      color: Brand.warning,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        needsAttention == 1
+                            ? '1 invoice needs your attention'
+                            : '$needsAttention invoices need your attention',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      color: GlassPalette.muted(context),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 26),
             const GlassSectionHeader(title: 'Quick actions'),
             const SizedBox(height: 12),
@@ -167,6 +209,7 @@ class HomeScreen extends ConsumerWidget {
                   : () => ref.read(syncStatusProvider.notifier).syncNow(),
             ),
           ],
+          ),
         ),
       ),
     );

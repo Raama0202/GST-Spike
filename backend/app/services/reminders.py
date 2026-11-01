@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from app.models import Invoice, ReminderChannel
+from app.models import ReminderChannel
 
 
-def contact_from_invoice(invoice: Invoice) -> tuple[str | None, str | None]:
-    edited = invoice.edited_data or {}
-    ocr = invoice.ocr_data or {}
+def contact_from_invoice(invoice: dict) -> tuple[str | None, str | None]:
+    edited = invoice.get("edited_data") or {}
+    ocr = invoice.get("ocr_data") or {}
     phone = edited.get("supplierPhone") or ocr.get("supplierPhone")
     email = edited.get("supplierEmail") or ocr.get("supplierEmail")
     if isinstance(phone, str):
@@ -23,15 +23,15 @@ def contact_from_invoice(invoice: Invoice) -> tuple[str | None, str | None]:
     return phone, email
 
 
-def reminder_message(invoice: Invoice, company_name: str | None = None) -> str:
-    vendor = invoice.vendor_name or "Supplier"
-    inv = invoice.invoice_number or "your invoice"
-    date = invoice.invoice_date.isoformat() if invoice.invoice_date else "N/A"
-    amount = f"₹{invoice.net_amount}" if invoice.net_amount is not None else "the billed amount"
+def reminder_message(invoice: dict, company_name: str | None = None) -> str:
+    vendor = invoice.get("vendor_name") or "Supplier"
+    inv = invoice.get("invoice_number") or "your invoice"
+    date = invoice.get("invoice_date") or "N/A"
+    amount = f"₹{invoice['net_amount']}" if invoice.get("net_amount") is not None else "the billed amount"
     who = company_name or "our company"
     return (
         f"Dear {vendor}, this is a reminder from {who}. "
-        f"Invoice {inv} dated {date} for {amount} is not yet reflecting in our GSTR-2B. "
+        f"Invoice {inv} dated {date} with invoice value {amount} is not yet reflecting in our GSTR-2B. "
         f"Please file/include it in your GSTR-1 so we can claim ITC. Thank you."
     )
 

@@ -1,15 +1,21 @@
 """Shared key-value store for rate limits and short-lived caches.
 
-Uses Redis when REDIS_URL is set; otherwise an in-process store that is only
-correct for a single worker. Redis errors fail open so an outage degrades
-rate limiting/caching instead of taking the API down.
+Redis when REDIS_URL is set; otherwise a MongoDB TTL collection (shared by
+every instance, no extra service), or an in-process store for tests. Store
+errors fail open so an outage degrades rate limiting/caching instead of
+taking the API down.
 """
 import json
 import logging
 import time
+from datetime import timedelta
 from typing import Any
 
+from pymongo import ReturnDocument
+
 from app.core.config import settings
+from app.db.mongo import get_database, utcnow
+from app.db.mongo import ping as mongo_ping
 
 logger = logging.getLogger(__name__)
 
@@ -102,17 +108,83 @@ class RedisStore:
         await self._client.aclose()
 
 
-_store: MemoryStore | RedisStore | None = None
+class MongoStore:
+    """`kv` collection: {_id: key, value, expires_at}. Atlas's TTL monitor removes
+    expired rows within ~60 s; reads and counters also check `expires_at` so a
+    lingering row is never treated as live."""
+
+    @staticmethod
+    def _collection():
+        return get_database()["kv"]
+
+    async def get(self, key: str) -> str | None:
+        try:
+            doc = await self._collection().find_one({"_id": key, "expires_at": {"$gt": utcnow()}})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("mongo cache get failed: %s", exc)
+            return None
+        return doc["value"] if doc else None
+
+    async def set(self, key: str, value: str, ttl: int | None = None) -> None:
+        expires = utcnow() + timedelta(seconds=ttl or 86400 * 365)
+        try:
+            await self._collection().update_one({"_id": key}, {"$set": {"value": value, "expires_at": expires}}, upsert=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("mongo cache set failed: %s", exc)
+
+    async def incr(self, key: str, ttl: int) -> int:
+        now = utcnow()
+        live = {"$gt": ["$expires_at", now]}
+        pipeline = [
+            {
+                "$set": {
+                    "count": {"$cond": [live, {"$add": [{"$ifNull": ["$count", 0]}, 1]}, 1]},
+                    "expires_at": {"$cond": [live, "$expires_at", now + timedelta(seconds=ttl)]},
+                }
+            },
+            {"$set": {"value": {"$toString": "$count"}}},
+        ]
+        try:
+            doc = await self._collection().find_one_and_update(
+                {"_id": key}, pipeline, upsert=True, return_document=ReturnDocument.AFTER
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("mongo cache incr failed: %s", exc)
+            return 0
+        return int(doc["count"]) if doc else 0
+
+    async def delete(self, *keys: str) -> None:
+        if not keys:
+            return
+        try:
+            await self._collection().delete_many({"_id": {"$in": list(keys)}})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("mongo cache delete failed: %s", exc)
+
+    async def ping(self) -> bool:
+        return await mongo_ping()
+
+    async def close(self) -> None:
+        return None
 
 
-def get_store() -> MemoryStore | RedisStore:
+Store = MemoryStore | RedisStore | MongoStore
+_store: Store | None = None
+
+
+def get_store() -> Store:
     global _store
     if _store is None:
-        _store = RedisStore(settings.redis_url) if settings.redis_url else MemoryStore()
+        if settings.redis_url:
+            _store = RedisStore(settings.redis_url)
+        elif settings.cache_backend.strip().lower() == "memory":
+            _store = MemoryStore()
+        else:
+            _store = MongoStore()
     return _store
 
 
-def set_store(store: MemoryStore | RedisStore | None) -> None:
+def set_store(store: Store | None) -> None:
     global _store
     _store = store
 

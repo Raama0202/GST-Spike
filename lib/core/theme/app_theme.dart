@@ -9,63 +9,85 @@ import 'glass.dart';
 class AppTheme {
   AppTheme._();
 
-  static ThemeData light({Color? brandPrimary}) {
+  static ThemeData light({Color? brandPrimary}) =>
+      _build(Brightness.light, brandPrimary);
+
+  static ThemeData dark({Color? brandPrimary}) =>
+      _build(Brightness.dark, brandPrimary);
+
+  static ThemeData _build(Brightness brightness, Color? brandPrimary) {
+    final isDark = brightness == Brightness.dark;
     final seed = brandPrimary ?? Brand.primary;
+    final ink = isDark ? GlassPalette.darkInk : Brand.ink;
     final scheme = ColorScheme.fromSeed(
       seedColor: seed,
-      brightness: Brightness.light,
-      primary: seed,
+      brightness: brightness,
+      primary: isDark ? Color.lerp(seed, Colors.white, 0.18) : seed,
       secondary: Brand.violet,
       tertiary: Brand.warning,
       error: Brand.danger,
-      surface: const Color(0xFFF8FAFF),
+      surface: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFF),
     );
+    final primary = scheme.primary;
 
-    final base = GoogleFonts.plusJakartaSansTextTheme();
+    final base = GoogleFonts.plusJakartaSansTextTheme(
+      isDark ? ThemeData.dark().textTheme : ThemeData.light().textTheme,
+    );
     final textTheme = base.copyWith(
       displayLarge: base.displayLarge?.copyWith(
         fontSize: 32,
         fontWeight: FontWeight.w800,
         height: 1.15,
-        color: Brand.ink,
+        color: ink,
       ),
       headlineMedium: base.headlineMedium?.copyWith(
         fontSize: 26,
         fontWeight: FontWeight.w800,
-        color: Brand.ink,
+        color: ink,
       ),
       headlineSmall: base.headlineSmall?.copyWith(
         fontWeight: FontWeight.w800,
-        color: Brand.ink,
+        color: ink,
       ),
       titleLarge: base.titleLarge?.copyWith(
         fontSize: 20,
         fontWeight: FontWeight.w700,
-        color: Brand.ink,
+        color: ink,
       ),
       titleMedium: base.titleMedium?.copyWith(
         fontWeight: FontWeight.w700,
-        color: Brand.ink,
+        color: ink,
       ),
       bodyLarge: base.bodyLarge?.copyWith(
         fontSize: 17,
         height: 1.4,
-        color: Brand.ink,
+        color: ink,
       ),
       bodyMedium: base.bodyMedium?.copyWith(
         fontSize: 15,
         height: 1.4,
-        color: Brand.ink,
+        color: ink,
       ),
-      bodySmall: base.bodySmall?.copyWith(color: Brand.muted),
+      bodySmall: base.bodySmall?.copyWith(
+        color: isDark ? GlassPalette.darkMuted : Brand.muted,
+      ),
       labelLarge: base.labelLarge?.copyWith(
         fontSize: 16,
         fontWeight: FontWeight.w700,
       ),
     );
 
-    final glassFill = Colors.white.withValues(alpha: 0.62);
-    final glassBorder = BorderSide(color: Colors.white.withValues(alpha: 0.9));
+    final glassFill = isDark
+        ? const Color(0xFF1E293B).withValues(alpha: 0.72)
+        : Colors.white.withValues(alpha: 0.62);
+    final glassBorder = BorderSide(
+      color: isDark
+          ? Colors.white.withValues(alpha: 0.10)
+          : Colors.white.withValues(alpha: 0.9),
+    );
+    final sheetColor = isDark
+        ? const Color(0xFF1E293B).withValues(alpha: 0.97)
+        : Colors.white.withValues(alpha: 0.96);
     final pill = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(40),
     );
@@ -76,6 +98,7 @@ class AppTheme {
 
     return ThemeData(
       useMaterial3: true,
+      brightness: brightness,
       colorScheme: scheme,
       textTheme: textTheme,
       scaffoldBackgroundColor: Colors.transparent,
@@ -92,10 +115,10 @@ class AppTheme {
         scrolledUnderElevation: 0,
         backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
-        foregroundColor: Brand.ink,
-        systemOverlayStyle: SystemUiOverlayStyle.dark.copyWith(
-          statusBarColor: Colors.transparent,
-        ),
+        foregroundColor: ink,
+        systemOverlayStyle:
+            (isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
+                .copyWith(statusBarColor: Colors.transparent),
         titleTextStyle: textTheme.titleLarge?.copyWith(
           fontWeight: FontWeight.w800,
         ),
@@ -113,8 +136,10 @@ class AppTheme {
           minimumSize: const Size.fromHeight(56),
           textStyle: textTheme.labelLarge,
           shape: pill,
-          backgroundColor: Colors.white.withValues(alpha: 0.55),
-          foregroundColor: seed,
+          backgroundColor: isDark
+              ? const Color(0xFF1E293B).withValues(alpha: 0.6)
+              : Colors.white.withValues(alpha: 0.55),
+          foregroundColor: primary,
           side: glassBorder,
         ),
       ),
@@ -134,7 +159,7 @@ class AppTheme {
         border: field,
         enabledBorder: field,
         focusedBorder: field.copyWith(
-          borderSide: BorderSide(color: seed, width: 1.6),
+          borderSide: BorderSide(color: primary, width: 1.6),
         ),
         errorBorder: field.copyWith(
           borderSide: const BorderSide(color: Brand.danger),
@@ -142,9 +167,11 @@ class AppTheme {
         focusedErrorBorder: field.copyWith(
           borderSide: const BorderSide(color: Brand.danger, width: 1.6),
         ),
-        labelStyle: textTheme.bodyMedium?.copyWith(color: Brand.muted),
+        labelStyle: textTheme.bodyMedium?.copyWith(
+          color: isDark ? GlassPalette.darkMuted : Brand.muted,
+        ),
         floatingLabelStyle: textTheme.bodyMedium?.copyWith(
-          color: seed,
+          color: primary,
           fontWeight: FontWeight.w700,
         ),
       ),
@@ -170,33 +197,35 @@ class AppTheme {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
       ),
       chipTheme: ChipThemeData(
-        backgroundColor: Colors.white.withValues(alpha: 0.6),
+        backgroundColor: glassFill,
         side: glassBorder,
         shape: const StadiumBorder(),
       ),
       dialogTheme: DialogThemeData(
-        backgroundColor: Colors.white.withValues(alpha: 0.94),
+        backgroundColor: sheetColor,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
       ),
       bottomSheetTheme: BottomSheetThemeData(
-        backgroundColor: Colors.white.withValues(alpha: 0.96),
+        backgroundColor: sheetColor,
         surfaceTintColor: Colors.transparent,
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
       ),
       progressIndicatorTheme: ProgressIndicatorThemeData(
-        color: seed,
-        linearTrackColor: Colors.white.withValues(alpha: 0.6),
+        color: primary,
+        linearTrackColor: glassFill,
       ),
       dividerTheme: DividerThemeData(
-        color: Colors.white.withValues(alpha: 0.7),
+        color: glassBorder.color,
         thickness: 1,
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: Brand.ink.withValues(alpha: 0.92),
+        backgroundColor: isDark
+            ? const Color(0xFF334155)
+            : Brand.ink.withValues(alpha: 0.92),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
     );

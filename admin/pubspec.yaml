@@ -41,6 +41,9 @@ dependencies:
   equatable: ^2.0.8
   file_picker: ^10.3.8
   url_launcher: ^6.3.2
+  share_plus: ^12.0.2
+  package_info_plus: ^9.0.1
+  sentry_flutter: 9.14.0
 
 dev_dependencies:
   flutter_test:
@@ -52,6 +55,17 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+# Regenerate with `dart run flutter_launcher_icons` after changing assets/icon/.
+flutter_launcher_icons:
+  image_path: assets/icon/app_icon.png
+  android: true
+  adaptive_icon_background: "#3730A3"
+  adaptive_icon_foreground: assets/icon/app_icon_foreground.png
+  ios: true
+  image_path_ios: assets/icon/app_icon_ios.png
+  remove_alpha_ios: true
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

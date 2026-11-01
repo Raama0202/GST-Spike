@@ -13,6 +13,9 @@ val keystorePropertiesFile = rootProject.file("key.properties")
 val hasReleaseKey = keystorePropertiesFile.exists()
 if (hasReleaseKey) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+} else if (System.getenv("REQUIRE_RELEASE_KEY") == "true") {
+    // Set in release CI so a store build can never silently fall back to the debug key.
+    throw GradleException("REQUIRE_RELEASE_KEY=true but admin/android/key.properties is missing.")
 } else {
     logger.warn("admin/android/key.properties not found: release build is signed with the DEBUG key (testing only, not uploadable to Play).")
 }

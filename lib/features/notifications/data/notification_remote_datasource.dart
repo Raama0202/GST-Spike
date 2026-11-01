@@ -10,10 +10,13 @@ class NotificationRemoteDataSource {
 
   final ApiClient _apiClient;
 
+  static const pageSize = 50;
+
   Future<List<AppNotification>> fetchNotifications() async {
     try {
       final response = await _apiClient.get<dynamic>(
         ApiEndpoints.notifications,
+        queryParameters: {'pageSize': pageSize},
       );
       final body = response.data;
       final data = body is Map ? body['items'] : body;
@@ -35,12 +38,10 @@ class NotificationRemoteDataSource {
     }
   }
 
-  Future<void> markRead(String notificationId) async {
+  Future<void> markRead(List<String> notificationIds) async {
     await _apiClient.post<void>(
       ApiEndpoints.markNotificationRead,
-      data: {
-        'ids': [notificationId],
-      },
+      data: {'ids': notificationIds},
     );
   }
 }

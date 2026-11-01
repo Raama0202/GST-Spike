@@ -147,7 +147,7 @@ struct UploadDetailView: View {
             fieldRow("SGST", money(d.sgst), money(o.sgst))
             fieldRow("IGST", money(d.igst), money(o.igst))
             fieldRow("Discount", money(d.discount), money(o.discount))
-            fieldRow("Net amount", money(d.netAmount), money(o.netAmount))
+            fieldRow("Invoice value", money(d.netAmount), money(o.netAmount))
             GlassDivider()
             fieldRow("Category", d.expenseCategoryName, nil)
             fieldRow("Remarks", d.remarks, nil)

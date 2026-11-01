@@ -1,91 +1,29 @@
-from datetime import datetime, timedelta, timezone
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.core.security import hash_password
+import factories as f
 from app.main import app
-from app.models import (
-    Branch,
-    Company,
-    CompanyStatus,
-    Employee,
-    ExpenseCategory,
-    Role,
-    Subscription,
-    SubscriptionPlan,
-    SubscriptionStatus,
-    User,
-)
+from app.models import Role
 
 
-async def seed_demo(session_factory):
-    async with session_factory() as db:
-        plan = SubscriptionPlan(
-            code="growth",
-            name="Growth",
-            monthly_price_inr=4999,
-            max_employees=50,
-        )
-        db.add(plan)
-        company = Company(
-            name="Acme Construction",
-            industry="Construction",
-            activation_code="ACME-ACTIVATE",
-            status=CompanyStatus.active,
-            primary_color_hex="0B5FFF",
-        )
-        db.add(company)
-        await db.flush()
-        branch = Branch(company_id=company.id, name="Site A", code="A")
-        category = ExpenseCategory(
-            company_id=company.id, name="Cement", sort_order=1
-        )
-        employee_user = User(company_id=company.id, role=Role.employee)
-        admin = User(
-            company_id=company.id,
-            role=Role.company_admin,
-            email="acme@demo.com",
-            password_hash=hash_password("DemoAdmin!123"),
-        )
-        super_admin = User(
-            company_id=None,
-            role=Role.super_admin,
-            email="admin@gstexpenses.app",
-            password_hash=hash_password("ChangeMeNow!123"),
-        )
-        db.add_all([branch, category, employee_user, admin, super_admin])
-        await db.flush()
-        db.add(
-            Employee(
-                company_id=company.id,
-                user_id=employee_user.id,
-                branch_id=branch.id,
-                name="Ravi Kumar",
-                employee_code="EMP001",
-                mobile="9999999999",
-            )
-        )
-        now = datetime.now(timezone.utc)
-        db.add(
-            Subscription(
-                company_id=company.id,
-                plan_code="growth",
-                seats=50,
-                starts_at=now,
-                ends_at=now + timedelta(days=365),
-                status=SubscriptionStatus.active,
-            )
-        )
-        await db.commit()
-        return str(branch.id)
+async def seed_demo(db):
+    await f.plan(db, code="growth", name="Growth", price=4999, max_employees=50)
+    company = await f.company(
+        db, "Acme Construction", industry="Construction", activation_code="ACME-ACTIVATE", primary_color_hex="0B5FFF"
+    )
+    branch = await f.branch(db, company["_id"], "Site A", "A")
+    await f.category(db, company["_id"], "Cement")
+    await f.user(db, company["_id"], Role.company_admin, email="acme@demo.com", password="DemoAdmin!123")
+    await f.user(db, None, Role.super_admin, email="admin@gstexpenses.app", password="ChangeMeNow!123")
+    await f.employee(db, company["_id"], branch_id=branch["_id"], name="Ravi Kumar", code="EMP001")
+    await f.subscription(db, company["_id"], "growth", 50, days=365)
+    return branch["_id"]
 
 
 @pytest.mark.asyncio
-async def test_employee_upload_admin_approve_notification_sync(db_engine):
+async def test_employee_upload_admin_approve_notification_sync(mongo):
     """Full SaaS path: OTP → config → upload → admin approve → employee notified."""
-    _, session_factory, _ = db_engine
-    branch_id = await seed_demo(session_factory)
+    branch_id = await seed_demo(mongo)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

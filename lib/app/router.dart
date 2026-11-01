@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:gst_expense_scanner/features/auth/domain/repositories/auth_repository.dart';
 import 'package:gst_expense_scanner/features/auth/presentation/providers/auth_providers.dart';
 import 'package:gst_expense_scanner/features/auth/presentation/screens/login_screen.dart';
 import 'package:gst_expense_scanner/features/auth/presentation/screens/otp_screen.dart';
@@ -42,7 +43,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
 
       if (auth is AuthUnauthenticated || auth is AuthErrorState) {
-        if (isAuthRoute || isSplash) return null;
+        if (isAuthRoute) return null;
         return '/login';
       }
 
@@ -64,6 +65,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           return OtpScreen(
             mobile: extra['mobile'] as String? ?? '',
             rememberLogin: extra['rememberLogin'] as bool? ?? true,
+            delivery: extra['delivery'] as OtpDelivery?,
           );
         },
       ),
@@ -81,14 +83,30 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/uploads',
-        builder: (_, __) => const UploadsScreen(),
+        builder: (context, state) => UploadsScreen(
+          initialFilter: state.uri.queryParameters['filter'],
+        ),
         routes: [
+          GoRoute(
+            path: 'server/:serverId',
+            builder: (context, state) => UploadDetailScreen.server(
+              serverId: state.pathParameters['serverId']!,
+            ),
+          ),
           GoRoute(
             path: ':id',
             builder: (context, state) {
               final id = state.pathParameters['id']!;
               return UploadDetailScreen(localId: id);
             },
+            routes: [
+              GoRoute(
+                path: 'resubmit',
+                builder: (context, state) => ResubmitScreen(
+                  localId: state.pathParameters['id']!,
+                ),
+              ),
+            ],
           ),
         ],
       ),

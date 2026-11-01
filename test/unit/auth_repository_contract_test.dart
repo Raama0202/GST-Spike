@@ -8,12 +8,14 @@ class _FakeAuthRepository implements AuthRepository {
   bool verified = false;
 
   @override
-  Future<Result<void>> requestOtp(String mobile) async {
+  Future<Result<OtpDelivery>> requestOtp(String mobile) async {
     requested = true;
     if (mobile.length != 10) {
       return const FailureResult('Invalid mobile');
     }
-    return const Success(null);
+    return const Success(
+      OtpDelivery(channel: 'email', destination: 'te***@example.com'),
+    );
   }
 
   @override
@@ -46,6 +48,9 @@ class _FakeAuthRepository implements AuthRepository {
 
   @override
   Future<Result<bool>> refreshSession() async => const Success(false);
+
+  @override
+  Future<void> clearLocalSession() async {}
 
   @override
   Future<Result<void>> logout() async => const Success(null);

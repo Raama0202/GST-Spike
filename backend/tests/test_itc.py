@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
-from app.models import GstrInwardRow, GstrReturnType, Invoice, ItcMatchStatus
+from app.models import GstrReturnType, ItcMatchStatus
 from app.services.gstr_excel import parse_gstr_file
 from app.services.itc_matcher import _best_match, _norm_inv
 
@@ -22,34 +22,28 @@ def test_parse_csv_gstr_headers():
 
 
 def test_best_match_exact_and_missing():
-    company_id = uuid4()
-    employee_id = uuid4()
-    import_id = uuid4()
-    invoice = Invoice(
-        company_id=company_id,
-        employee_id=employee_id,
-        original_image_path="x",
-        compressed_image_path="x",
-        thumbnail_image_path="x",
-        gstin="37AABCT1332L1ZV",
-        invoice_number="INV-1001",
-        invoice_date=date(2024, 3, 15),
-        taxable_amount=Decimal("1000"),
-        net_amount=Decimal("1180"),
-    )
-    row = GstrInwardRow(
-        company_id=company_id,
-        import_id=import_id,
-        period="2024-03",
-        return_type=GstrReturnType.gstr_2b,
-        supplier_gstin="37AABCT1332L1ZV",
-        invoice_number="INV-1001",
-        invoice_date=date(2024, 3, 15),
-        taxable_amount=Decimal("1000"),
-        net_amount=Decimal("1180"),
-        raw_json={},
-    )
-    row.id = uuid4()
+    company_id = str(uuid4())
+    invoice = {
+        "_id": str(uuid4()),
+        "company_id": company_id,
+        "gstin": "37AABCT1332L1ZV",
+        "invoice_number": "INV-1001",
+        "invoice_date": "2024-03-15",
+        "taxable_amount": Decimal("1000"),
+        "net_amount": Decimal("1180"),
+    }
+    row = {
+        "_id": str(uuid4()),
+        "company_id": company_id,
+        "period": "2024-03",
+        "return_type": GstrReturnType.gstr_2b.value,
+        "supplier_gstin": "37AABCT1332L1ZV",
+        "invoice_number": "INV-1001",
+        "invoice_date": "2024-03-15",
+        "taxable_amount": Decimal("1000"),
+        "net_amount": Decimal("1180"),
+        "raw_json": {},
+    }
     matched, status, delta, _ = _best_match(invoice, [row], set())
     assert matched is row
     assert status == ItcMatchStatus.matched

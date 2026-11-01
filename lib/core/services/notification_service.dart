@@ -11,14 +11,28 @@ class NotificationService {
 
   bool _initialized = false;
 
+  /// Invoked when the user taps a notification; [payload] is the invoice
+  /// server id when the alert is about a specific bill.
+  void Function(String? payload)? onTap;
+
   Future<void> initialize() async {
     if (_initialized) return;
 
-    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const ios = DarwinInitializationSettings();
+    // Monochrome glyph: Android renders a coloured launcher icon as a white square.
+    const android = AndroidInitializationSettings('@drawable/ic_stat_notify');
+    // The iOS prompt is shown after sign-in by [requestPermission], not here.
+    const ios = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
+    );
     const settings = InitializationSettings(android: android, iOS: ios);
 
-    await _plugin.initialize(settings);
+    await _plugin.initialize(
+      settings,
+      onDidReceiveNotificationResponse: (response) =>
+          onTap?.call(response.payload),
+    );
 
     const channel = AndroidNotificationChannel(
       'gst_expense_alerts',
@@ -33,6 +47,17 @@ class NotificationService {
         ?.createNotificationChannel(channel);
 
     _initialized = true;
+  }
+
+  /// Payload of the local notification that cold-started the app, if any.
+  Future<String?> launchPayload() async {
+    try {
+      final details = await _plugin.getNotificationAppLaunchDetails();
+      if (details?.didNotificationLaunchApp != true) return null;
+      return details!.notificationResponse?.payload ?? '';
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Asks for POST_NOTIFICATIONS (Android 13+) once the user is signed in.
@@ -56,6 +81,7 @@ class NotificationService {
     required int id,
     required String title,
     required String body,
+    String? payload,
   }) async {
     if (!_initialized) await initialize();
 
@@ -65,11 +91,12 @@ class NotificationService {
         'Expense alerts',
         importance: Importance.high,
         priority: Priority.high,
+        icon: '@drawable/ic_stat_notify',
       ),
       iOS: DarwinNotificationDetails(),
     );
 
-    await _plugin.show(id, title, body, details);
+    await _plugin.show(id, title, body, details, payload: payload);
   }
 
   Future<void> cancelAll() => _plugin.cancelAll();

@@ -24,6 +24,9 @@ class LocalDatabase {
 
   bool get isInitialized => _initialized;
 
+  /// Company id of the open invoice/queue boxes (`global` before sign-in).
+  String get tenantSuffix => _tenantSuffix ?? 'global';
+
   Box<dynamic> get session => _require(_session, HiveBoxes.session);
   Box<dynamic> get companyConfig =>
       _require(_companyConfig, HiveBoxes.companyConfig);
@@ -89,9 +92,23 @@ class LocalDatabase {
     _tenantSuffix = suffix;
   }
 
+  /// Re-reads the tenant boxes from disk after the background worker (another
+  /// isolate with its own in-memory copy) has written to them.
+  Future<void> reloadTenantBoxes() async {
+    final suffix = _tenantSuffix;
+    if (suffix == null) return;
+    _tenantSuffix = null;
+    await openTenantBoxes(suffix == 'global' ? null : suffix);
+  }
+
+  /// Meta key for the incremental `/invoices/mine` cursor of this tenant.
+  String get statusPullKey => 'statusPull_$tenantSuffix';
+
   Future<void> clearTenantData() async {
     await invoices.clear();
     await uploadQueue.clear();
+    // Forces a full history import on the next sign-in.
+    await meta.delete(statusPullKey);
   }
 
   Future<void> clearAllUserData() async {
@@ -151,5 +168,31 @@ class InvoiceImageStore {
     if (await dir.exists()) {
       await dir.delete(recursive: true);
     }
+  }
+
+  /// Deletes the per-invoice folders holding [paths]. Anything outside the
+  /// image store (e.g. a gallery photo) is left alone. Never throws.
+  Future<void> deleteForPaths(Iterable<String?> paths) async {
+    try {
+      final root = (await _root()).absolute.path;
+      final dirs = <String>{
+        for (final path in paths)
+          if (path != null && path.isNotEmpty) File(path).absolute.parent.path,
+      };
+      for (final dir in dirs) {
+        if (dir == root || !dir.startsWith(root)) continue;
+        final directory = Directory(dir);
+        if (await directory.exists()) await directory.delete(recursive: true);
+      }
+    } catch (_) {}
+  }
+
+  /// Removes a single file, ignoring errors.
+  Future<void> deleteFile(String? path) async {
+    if (path == null || path.isEmpty) return;
+    try {
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
   }
 }

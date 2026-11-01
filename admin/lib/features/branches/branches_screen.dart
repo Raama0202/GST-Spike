@@ -12,10 +12,21 @@ class BranchesScreen extends ConsumerWidget {
     endpoint: ApiPaths.branches,
     title: 'Branches',
     subtitle: 'Manage offices, sites and other expense locations.',
+    entityName: 'branch',
     emptyTitle: 'No branches yet',
+    icon: Icons.location_on_outlined,
     fields: const ['name', 'code'],
-    itemSubtitle: (item) => 'Code: ${item['code'] ?? '—'}',
-    formBuilder: (_, c) => Column(
+    allowDeactivate: true,
+    deactivateMessage:
+        'It will no longer be offered when assigning employees. Existing '
+        'invoices keep their branch.',
+    reactivateBody: (item) => {
+      'name': item['name'],
+      'code': item['code'],
+      'isActive': true,
+    },
+    itemSubtitle: (item, _) => 'Code: ${item['code'] ?? '—'}',
+    formBuilder: (_, c, _) => Column(
       children: [
         requiredField(c, 'name', 'Branch name'),
         requiredField(c, 'code', 'Branch code'),

@@ -8,6 +8,7 @@ class NotificationLocalDataSource {
   NotificationLocalDataSource(this._database);
 
   static const String _listKey = 'items';
+  static const String _pendingReadKey = 'pendingRead';
 
   final LocalDatabase _database;
 
@@ -46,6 +47,28 @@ class NotificationLocalDataSource {
         .map((n) => n.id == id ? n.copyWith(read: true) : n)
         .toList();
     await saveAll(updated);
+  }
+
+  /// Ids marked read while the server could not be told.
+  Set<String> pendingReadIds() {
+    final raw = _database.notifications.get(_pendingReadKey);
+    return raw is List ? raw.whereType<String>().toSet() : <String>{};
+  }
+
+  Future<void> addPendingRead(String id) async {
+    await _database.notifications.put(
+      _pendingReadKey,
+      {...pendingReadIds(), id}.toList(),
+    );
+  }
+
+  Future<void> removePendingRead(Iterable<String> ids) async {
+    final remaining = pendingReadIds()..removeAll(ids);
+    if (remaining.isEmpty) {
+      await _database.notifications.delete(_pendingReadKey);
+    } else {
+      await _database.notifications.put(_pendingReadKey, remaining.toList());
+    }
   }
 
   int unreadCount() => readAll().where((n) => !n.read).length;

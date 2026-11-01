@@ -40,12 +40,29 @@ dependencies:
   intl: ^0.20.2
   equatable: ^2.0.7
   collection: ^1.19.1
-
+  firebase_core: ^5.1.0
+  firebase_messaging: ^17.0.1
+  geolocator: ^14.0.2
+  shared_preferences: ^2.5.6
+  url_launcher: ^6.3.3
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
   mocktail: ^1.0.4
+  flutter_launcher_icons: ^0.14.4
+
+# Regenerate with: dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: "ic_launcher"
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  image_path_ios: "assets/icon/app_icon_ios.png"
+  remove_alpha_ios: true
+  min_sdk_android: 24
+  adaptive_icon_background: "#0B5FFF"
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"
+  adaptive_icon_monochrome: "assets/icon/app_icon_monochrome.png"
 
 flutter:
   uses-material-design: true

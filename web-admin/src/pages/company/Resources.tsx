@@ -5,6 +5,7 @@ import type { Items, NamedResource } from '../../api/types'
 import {
   Alert, Badge, Card, Confirm, Empty, ErrorState, Field, Loading, Modal, PageHeader, Spinner, Toggle, useAsync, useToast,
 } from '../../components/ui'
+import { invalidateResources } from '../../lib/lookups'
 
 interface Config {
   path: string
@@ -39,12 +40,32 @@ const BRANCH: Config = {
 export const Categories = () => <ResourcePage config={CATEGORY} />
 export const Branches = () => <ResourcePage config={BRANCH} />
 
+/** The item itself plus everything nested under it: none of these can become its parent. */
+function selfAndDescendants(id: string, all: NamedResource[]): Set<string> {
+  const blocked = new Set([id])
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const x of all) {
+      if (x.parentId && blocked.has(x.parentId) && !blocked.has(x.id)) {
+        blocked.add(x.id)
+        grew = true
+      }
+    }
+  }
+  return blocked
+}
+
 function ResourcePage({ config }: { config: Config }) {
   const toast = useToast()
-  const { data, error, loading, reload } = useAsync(
+  const { data, error, loading, reload: load } = useAsync(
     () => api<Items<NamedResource>>(config.path).then((r) => [...r.items].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))),
     [config.path],
   )
+  const reload = async () => {
+    invalidateResources(config.path)
+    await load()
+  }
   const [editing, setEditing] = useState<NamedResource | 'new' | null>(null)
   const [archiving, setArchiving] = useState<NamedResource | null>(null)
   const [busy, setBusy] = useState(false)
@@ -161,6 +182,8 @@ function ResourceEditor({ config, item, all, onClose, onSaved }: {
   const [error, setError] = useState<string | null>(null)
 
   const valid = name.trim() && (!config.withCode || code.trim())
+  const blocked = item ? selfAndDescendants(item.id, all) : new Set<string>()
+  const dirty = name !== (item?.name ?? '') || code !== (item?.code ?? '') || parentId !== (item?.parentId ?? '') || isActive !== (item?.isActive ?? true)
 
   async function save() {
     setBusy(true)
@@ -180,7 +203,6 @@ function ResourceEditor({ config, item, all, onClose, onSaved }: {
       onClose()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save')
-    } finally {
       setBusy(false)
     }
   }
@@ -189,9 +211,11 @@ function ResourceEditor({ config, item, all, onClose, onSaved }: {
     <Modal
       title={item ? `Edit ${item.name}` : `Add ${config.singular}`}
       onClose={onClose}
+      busy={busy}
+      dirty={dirty}
       footer={
         <>
-          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
           <button className="btn primary" disabled={!valid || busy} onClick={save}>{busy && <Spinner small />} Save</button>
         </>
       }
@@ -206,7 +230,7 @@ function ResourceEditor({ config, item, all, onClose, onSaved }: {
               <Field label="Parent category" hint="optional">
                 <select className="select" value={parentId} onChange={(e) => setParentId(e.target.value)}>
                   <option value="">None (top level)</option>
-                  {all.filter((x) => x.id !== item?.id && x.isActive).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                  {all.filter((x) => !blocked.has(x.id) && (x.isActive || x.id === parentId)).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
                 </select>
               </Field>
               <Field label="Display order"><input className="input" type="number" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} /></Field>

@@ -4,12 +4,17 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useRef,
   useState,
   type ErrorInfo,
   type ReactNode,
 } from 'react'
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Info, Inbox, RefreshCw, X, XCircle } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { AlertTriangle, Check, CheckCircle2, ChevronLeft, ChevronRight, Copy, Info, Inbox, RefreshCw, X, XCircle } from 'lucide-react'
+import { reportError } from '../lib/monitoring'
+
+const APP_NAME = 'GST Expense Console'
 
 /* ---------- Error boundary ---------- */
 export class ErrorBoundary extends Component<{ children: ReactNode; resetKey?: string }, { error: Error | null }> {
@@ -21,6 +26,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode; resetKey?: s
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('UI crashed', error, info.componentStack)
+    reportError(error, { componentStack: info.componentStack })
   }
 
   componentDidUpdate(prev: { resetKey?: string }) {
@@ -50,14 +56,14 @@ export function Pagination({ page, pageSize, total, onPage }: { page: number; pa
   const from = total === 0 ? 0 : (page - 1) * pageSize + 1
   const to = Math.min(total, page * pageSize)
   return (
-    <div className="row between" style={{ marginTop: 14 }}>
+    <nav className="row between wrap" style={{ marginTop: 14 }} aria-label="Pagination">
       <span className="faint">{from.toLocaleString('en-IN')}–{to.toLocaleString('en-IN')} of {total.toLocaleString('en-IN')}</span>
       <div className="actions">
         <button className="btn sm" disabled={page <= 1} onClick={() => onPage(page - 1)}><ChevronLeft size={14} /> Previous</button>
         <span className="faint" style={{ minWidth: 72, textAlign: 'center' }}>Page {page} / {pages}</span>
         <button className="btn sm" disabled={page >= pages} onClick={() => onPage(page + 1)}>Next <ChevronRight size={14} /></button>
       </div>
-    </div>
+    </nav>
   )
 }
 
@@ -71,6 +77,20 @@ export function useDebounced<T>(value: T, delay = 300): T {
   return debounced
 }
 
+/** Page number that falls back to 1 whenever `key` (the serialised filters) changes, without an extra fetch. */
+export function usePaged(key: string): [number, (page: number) => void] {
+  const [state, setState] = useState({ key, page: 1 })
+  const page = state.key === key ? state.page : 1
+  const setPage = useCallback((next: number) => setState({ key, page: next }), [key])
+  return [page, setPage]
+}
+
+export function useDocumentTitle(title: string | null | undefined) {
+  useEffect(() => {
+    document.title = title ? `${title} · ${APP_NAME}` : APP_NAME
+  }, [title])
+}
+
 export function Backdrop() {
   return (
     <div className="backdrop" aria-hidden>
@@ -81,10 +101,11 @@ export function Backdrop() {
   )
 }
 
-export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
+export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
+  useDocumentTitle(title)
   return (
     <div className="topbar">
-      <div>
+      <div style={{ minWidth: 0 }}>
         <h1 className="page-title">{title}</h1>
         {subtitle && <div className="page-sub">{subtitle}</div>}
       </div>
@@ -105,7 +126,7 @@ export function Card({ title, subtitle, actions, children, className = '' }: {
       {(title || actions) && (
         <div className="card-head">
           <div>
-            {title && <div className="card-title">{title}</div>}
+            {title && <h2 className="card-title">{title}</h2>}
             {subtitle && <div className="card-sub">{subtitle}</div>}
           </div>
           {actions && <div className="actions">{actions}</div>}
@@ -116,21 +137,25 @@ export function Card({ title, subtitle, actions, children, className = '' }: {
   )
 }
 
-export function Stat({ icon, label, value, tone }: { icon: ReactNode; label: string; value: ReactNode; tone?: string }) {
-  return (
-    <div className="glass stat" style={tone ? ({ '--tone': tone } as React.CSSProperties) : undefined}>
+export function Stat({ icon, label, value, tone, to }: { icon: ReactNode; label: ReactNode; value: ReactNode; tone?: string; to?: string }) {
+  const style = tone ? ({ '--tone': tone } as React.CSSProperties) : undefined
+  const body = (
+    <>
       <div className="stat-icon">{icon}</div>
       <div className="stat-value">{value}</div>
       <div className="stat-label">{label}</div>
-    </div>
+    </>
   )
+  return to
+    ? <Link to={to} className="glass stat stat-link" style={style}>{body}</Link>
+    : <div className="glass stat" style={style}>{body}</div>
 }
 
 const BADGE_TONES: Record<string, string> = {
-  active: 'green', approved: 'green', matched: 'green', ready: 'green', resolved: 'green', sent_link: 'blue',
-  pending: 'amber', partial: 'amber', processing: 'amber', manual_followup: 'amber', returned: 'violet',
-  suspended: 'red', rejected: 'red', failed: 'red', mismatch: 'red', missing_in_2b: 'red',
-  missing_in_books: 'violet', inactive: 'gray',
+  active: 'green', approved: 'green', matched: 'green', ready: 'green', resolved: 'green', paid: 'green', sent_link: 'blue',
+  authorized: 'blue', pending: 'amber', created: 'amber', partial: 'amber', processing: 'amber', manual_followup: 'amber',
+  returned: 'violet', suspended: 'red', rejected: 'red', failed: 'red', mismatch: 'red', missing_in_2b: 'red', expired: 'red',
+  missing_in_books: 'violet', refunded: 'violet', inactive: 'gray',
 }
 
 export function Badge({ status, label }: { status: string; label?: string }) {
@@ -139,19 +164,19 @@ export function Badge({ status, label }: { status: string; label?: string }) {
 }
 
 export function Spinner({ small }: { small?: boolean }) {
-  return <span className={`spinner ${small ? 'sm' : ''}`} />
+  return <span className={`spinner ${small ? 'sm' : ''}`} aria-hidden />
 }
 
 export function Loading({ label = 'Loading…' }: { label?: string }) {
   return (
-    <div className="loading-block">
+    <div className="loading-block" role="status">
       <Spinner />
       <span>{label}</span>
     </div>
   )
 }
 
-export function Empty({ icon, title, message, action }: { icon?: ReactNode; title: string; message?: string; action?: ReactNode }) {
+export function Empty({ icon, title, message, action }: { icon?: ReactNode; title: string; message?: ReactNode; action?: ReactNode }) {
   return (
     <div className="empty">
       <div className="empty-icon">{icon ?? <Inbox size={24} />}</div>
@@ -164,66 +189,150 @@ export function Empty({ icon, title, message, action }: { icon?: ReactNode; titl
 
 export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <Empty
-      icon={<AlertTriangle size={24} color="#fca5a5" />}
-      title="Couldn't load this"
-      message={message}
-      action={onRetry && (
-        <button className="btn" onClick={onRetry}><RefreshCw size={15} /> Try again</button>
-      )}
-    />
+    <div role="alert">
+      <Empty
+        icon={<AlertTriangle size={24} color="#fca5a5" />}
+        title="Couldn't load this"
+        message={message}
+        action={onRetry && (
+          <button className="btn" onClick={onRetry}><RefreshCw size={15} /> Try again</button>
+        )}
+      />
+    </div>
   )
 }
 
 export function Alert({ kind = 'info', children }: { kind?: 'info' | 'error' | 'success'; children: ReactNode }) {
   const Icon = kind === 'error' ? XCircle : kind === 'success' ? CheckCircle2 : Info
-  return <div className={`alert ${kind}`}><Icon size={16} /><div>{children}</div></div>
+  return (
+    <div className={`alert ${kind}`} role={kind === 'error' ? 'alert' : kind === 'success' ? 'status' : undefined}>
+      <Icon size={16} aria-hidden /><div>{children}</div>
+    </div>
+  )
 }
 
-export function Modal({ title, subtitle, onClose, children, footer, wide }: {
+/* ---------- Modal ---------- */
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+const modalStack: number[] = []
+let modalSeq = 0
+
+export function Modal({ title, subtitle, onClose, children, footer, wide, busy, dirty }: {
   title: string
-  subtitle?: string
+  subtitle?: ReactNode
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
   wide?: boolean
+  /** A request is running: Escape, backdrop and the close button do nothing. */
+  busy?: boolean
+  /** Unsaved input: Escape, backdrop and the close button ask before discarding. */
+  dirty?: boolean
 }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const titleId = useId()
+  const [askDiscard, setAskDiscard] = useState(false)
+  const latest = useRef({ busy, dirty, onClose })
+  latest.current = { busy, dirty, onClose }
+
+  const requestClose = useCallback(() => {
+    const { busy: running, dirty: unsaved, onClose: close } = latest.current
+    if (running) return
+    if (unsaved) setAskDiscard(true)
+    else close()
+  }, [])
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+    const id = ++modalSeq
+    modalStack.push(id)
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const node = ref.current
+    if (node && !node.contains(document.activeElement)) (node.querySelector<HTMLElement>(FOCUSABLE) ?? node).focus()
+
+    const onKey = (e: KeyboardEvent) => {
+      const box = ref.current
+      if (modalStack[modalStack.length - 1] !== id || !box) return
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        requestClose()
+      } else if (e.key === 'Tab') {
+        const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null)
+        if (!items.length) return e.preventDefault()
+        const first = items[0]
+        const last = items[items.length - 1]
+        if (e.shiftKey && (document.activeElement === first || !box.contains(document.activeElement))) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && (document.activeElement === last || !box.contains(document.activeElement))) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    document.body.classList.add('modal-open')
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      modalStack.splice(modalStack.indexOf(id), 1)
+      if (!modalStack.length) document.body.classList.remove('modal-open')
+      if (previous?.isConnected) previous.focus()
+    }
+  }, [requestClose])
+
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && requestClose()}>
+      <div ref={ref} tabIndex={-1} className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="modal-head">
           <div>
-            <div className="modal-title">{title}</div>
+            <div className="modal-title" id={titleId}>{title}</div>
             {subtitle && <div className="card-sub" style={{ marginTop: 4 }}>{subtitle}</div>}
           </div>
-          <button className="btn ghost icon" onClick={onClose} aria-label="Close"><X size={18} /></button>
+          <button className="btn ghost icon" onClick={requestClose} disabled={busy} aria-label="Close"><X size={18} /></button>
         </div>
         <div className="modal-body">{children}</div>
-        {footer && <div className="modal-foot">{footer}</div>}
+        {askDiscard ? (
+          <div className="modal-foot discard" role="alertdialog" aria-label="Discard changes?">
+            <span className="muted" style={{ marginRight: 'auto' }}>Discard your unsaved changes?</span>
+            <button className="btn" onClick={() => setAskDiscard(false)} autoFocus>Keep editing</button>
+            <button className="btn danger" onClick={onClose}>Discard</button>
+          </div>
+        ) : footer && <div className="modal-foot">{footer}</div>}
       </div>
     </div>
   )
 }
 
-export function Field({ label, hint, children, full }: { label: string; hint?: string; children: ReactNode; full?: boolean }) {
+export function Field({ label, hint, children, full, group }: {
+  label: string
+  hint?: string
+  children: ReactNode
+  full?: boolean
+  /** Render as a labelled group (for segmented controls), so clicking the label doesn't trigger the first button. */
+  group?: boolean
+}) {
+  const id = useId()
+  const text = <>{label} {hint && <span className="hint">· {hint}</span>}</>
+  if (group) {
+    return (
+      <div className={`field ${full ? 'full' : ''}`} role="group" aria-labelledby={id}>
+        <span id={id}>{text}</span>
+        {children}
+      </div>
+    )
+  }
   return (
     <label className={`field ${full ? 'full' : ''}`}>
-      <span>{label} {hint && <span className="hint">· {hint}</span>}</span>
+      <span>{text}</span>
       {children}
     </label>
   )
 }
 
-export function Toggle({ checked, onChange, label, description }: {
+export function Toggle({ checked, onChange, label, description, disabled }: {
   checked: boolean
   onChange: (value: boolean) => void
   label: string
   description?: string
+  disabled?: boolean
 }) {
   return (
     <div className="switch">
@@ -232,7 +341,7 @@ export function Toggle({ checked, onChange, label, description }: {
         {description && <div className="desc">{description}</div>}
       </div>
       <label className="toggle">
-        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} aria-label={label} />
+        <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} aria-label={label} />
         <span className="track" />
       </label>
     </div>
@@ -250,15 +359,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const push = useCallback((message: string, kind: ToastKind = 'success') => {
     const id = nextId.current++
     setItems((list) => [...list, { id, kind, message }])
-    setTimeout(() => setItems((list) => list.filter((t) => t.id !== id)), 4200)
+    setTimeout(() => setItems((list) => list.filter((t) => t.id !== id)), kind === 'error' ? 6500 : 4200)
   }, [])
   return (
     <ToastContext.Provider value={push}>
       {children}
-      <div className="toasts" role="status">
+      <div className="toasts" role="status" aria-live="polite">
         {items.map((t) => {
           const Icon = t.kind === 'error' ? XCircle : t.kind === 'info' ? Info : CheckCircle2
-          return <div key={t.id} className={`toast ${t.kind}`}><Icon size={18} /><span>{t.message}</span></div>
+          return <div key={t.id} className={`toast ${t.kind}`}><Icon size={18} aria-hidden /><span>{t.message}</span></div>
         })}
       </div>
     </ToastContext.Provider>
@@ -266,6 +375,27 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 export const useToast = () => useContext(ToastContext)
+
+/* ---------- Copy to clipboard ---------- */
+export function CopyButton({ text, label = 'Copy', compact }: { text: string; label?: string; compact?: boolean }) {
+  const toast = useToast()
+  const [copied, setCopied] = useState(false)
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      toast('Could not copy automatically. Select the text and copy it.', 'error')
+    }
+  }
+  const icon = copied ? <Check size={14} color="#34d399" /> : <Copy size={14} />
+  return compact ? (
+    <button className="btn ghost icon sm" style={{ width: 26, height: 26 }} title={label} aria-label={label} onClick={copy}>{icon}</button>
+  ) : (
+    <button className="btn sm" onClick={copy}>{icon} {copied ? 'Copied' : label}</button>
+  )
+}
 
 /* ---------- Confirm dialog ---------- */
 export function Confirm({ title, message, confirmLabel = 'Confirm', danger, busy, onConfirm, onClose }: {
@@ -281,6 +411,7 @@ export function Confirm({ title, message, confirmLabel = 'Confirm', danger, busy
     <Modal
       title={title}
       onClose={onClose}
+      busy={busy}
       footer={
         <>
           <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>

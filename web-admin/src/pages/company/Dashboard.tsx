@@ -1,11 +1,11 @@
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowRight, CheckCircle2, Clock, CornerUpLeft, Receipt, Upload, XCircle } from 'lucide-react'
+import { ArrowRight, CheckCircle2, Clock, CornerUpLeft, PieChart, Receipt, Upload, Users, XCircle } from 'lucide-react'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../../api/client'
-import type { Dashboard as DashboardData, Invoice, Items } from '../../api/types'
+import type { Dashboard as DashboardData, Invoice, Page } from '../../api/types'
 import { Badge, Card, Empty, ErrorState, Loading, PageHeader, Stat, useAsync } from '../../components/ui'
-import { money, relative, toNumber } from '../../lib/format'
-import { InvoiceThumb } from './Invoices'
+import { dayLabel, money, relative, toNumber } from '../../lib/format'
+import { InvoiceThumb, vendorOf } from './InvoiceParts'
 
 const tooltipStyle = { background: '#121a3a', border: '1px solid rgba(255,255,255,.15)', borderRadius: 12 }
 
@@ -14,7 +14,7 @@ export default function Dashboard() {
   const { data, error, loading, reload } = useAsync(async () => {
     const [stats, recent] = await Promise.all([
       api<DashboardData>('/admin/dashboard'),
-      api<Items<Invoice>>('/admin/invoices', { query: { pageSize: 100 } }),
+      api<Page<Invoice>>('/admin/invoices', { query: { pageSize: 6 } }),
     ])
     return { stats, invoices: recent.items }
   })
@@ -29,22 +29,10 @@ export default function Dashboard() {
     { name: 'Returned', value: stats.returnedCount, color: '#a78bfa' },
     { name: 'Rejected', value: stats.rejectedCount, color: '#f87171' },
   ]
-
-  const byDay = new Map<string, number>()
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(Date.now() - i * 86400000)
-    byDay.set(d.toISOString().slice(0, 10), 0)
-  }
-  for (const inv of invoices) {
-    const key = inv.uploadedAt?.slice(0, 10)
-    if (key && byDay.has(key)) byDay.set(key, (byDay.get(key) ?? 0) + (toNumber(inv.netAmount) ?? 0))
-  }
-  const spend = [...byDay.entries()].map(([day, amount]) => ({
-    day: new Date(day).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
-    amount,
-  }))
-  const approvedValue = invoices.filter((i) => i.approvalStatus === 'approved').reduce((s, i) => s + (toNumber(i.netAmount) ?? 0), 0)
-  const pendingValue = invoices.filter((i) => i.approvalStatus === 'pending').reduce((s, i) => s + (toNumber(i.netAmount) ?? 0), 0)
+  const spend = (stats.daily ?? []).map((d) => ({ day: dayLabel(d.date), amount: toNumber(d.amount) ?? 0, count: d.count }))
+  const topCategories = stats.topCategories ?? []
+  const seats = stats.seats
+  const seatShare = seats?.limit ? Math.min(100, Math.round((seats.used / seats.limit) * 100)) : null
 
   return (
     <>
@@ -59,36 +47,48 @@ export default function Dashboard() {
       />
       <div className="stack">
         <div className="grid cols-4">
-          <Stat icon={<Upload size={20} />} label="Uploaded today" value={stats.todayUploads} tone="#22d3ee" />
-          <Stat icon={<Clock size={20} />} label={`Awaiting review · ${money(pendingValue, true)}`} value={stats.pendingCount} tone="#fbbf24" />
-          <Stat icon={<CheckCircle2 size={20} />} label={`Approved · ${money(approvedValue, true)}`} value={stats.approvedCount} tone="#34d399" />
+          <Stat icon={<Upload size={20} />} label="Uploaded today" value={stats.todayUploads} tone="#22d3ee" to="/invoices?sort=uploaded_desc" />
           <Stat
-            icon={<CornerUpLeft size={20} />}
-            label="Returned / rejected"
-            value={<>{stats.returnedCount}<span className="faint" style={{ fontSize: 18 }}> / {stats.rejectedCount}</span></>}
-            tone="#a78bfa"
+            icon={<Clock size={20} />}
+            label={stats.pendingAmount !== undefined ? `Awaiting review · ${money(stats.pendingAmount, true)}` : 'Awaiting review'}
+            value={stats.pendingCount}
+            tone="#fbbf24"
+            to="/invoices?status=pending"
           />
+          <Stat
+            icon={<CheckCircle2 size={20} />}
+            label={stats.approvedAmount !== undefined ? `Approved · ${money(stats.approvedAmount, true)}` : 'Approved'}
+            value={stats.approvedCount}
+            tone="#34d399"
+            to="/invoices?status=approved"
+          />
+          <Stat icon={<CornerUpLeft size={20} />} label="Returned for correction" value={stats.returnedCount} tone="#a78bfa" to="/invoices?status=returned" />
         </div>
 
         <div className="grid cols-3">
-          <Card title="Submitted value" subtitle="Net amount uploaded per day · last 14 days" className="span-2">
-            <div className="chart-box">
-              <ResponsiveContainer>
-                <AreaChart data={spend} margin={{ left: 0, right: 8, top: 10 }}>
-                  <defs>
-                    <linearGradient id="spend" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#7c9cff" stopOpacity={0.55} />
-                      <stop offset="100%" stopColor="#7c9cff" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="rgba(255,255,255,.06)" vertical={false} />
-                  <XAxis dataKey="day" stroke="rgba(226,232,255,.45)" fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis stroke="rgba(226,232,255,.45)" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => money(v, true)} width={70} />
-                  <Tooltip contentStyle={tooltipStyle} formatter={(v) => money(v)} />
-                  <Area type="monotone" dataKey="amount" stroke="#7c9cff" strokeWidth={2.5} fill="url(#spend)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+          <Card title="Submitted value" subtitle="Invoice value uploaded per day · last 14 days (IST)" className="span-2">
+            {spend.length === 0 ? <Empty title="No uploads in the last 14 days" /> : (
+              <div className="chart-box">
+                <ResponsiveContainer>
+                  <AreaChart data={spend} margin={{ left: 0, right: 8, top: 10 }}>
+                    <defs>
+                      <linearGradient id="spend" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#7c9cff" stopOpacity={0.55} />
+                        <stop offset="100%" stopColor="#7c9cff" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="rgba(255,255,255,.06)" vertical={false} />
+                    <XAxis dataKey="day" stroke="rgba(226,232,255,.45)" fontSize={11} tickLine={false} axisLine={false} />
+                    <YAxis stroke="rgba(226,232,255,.45)" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => money(v, true)} width={70} />
+                    <Tooltip
+                      contentStyle={tooltipStyle}
+                      formatter={(v, _name, item) => [`${money(v)} · ${(item.payload as { count: number }).count} bills`, 'Uploaded']}
+                    />
+                    <Area type="monotone" dataKey="amount" stroke="#7c9cff" strokeWidth={2.5} fill="url(#spend)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </Card>
           <Card title="Approval pipeline" subtitle="All-time invoice status">
             <div className="chart-box">
@@ -107,40 +107,75 @@ export default function Dashboard() {
           </Card>
         </div>
 
-        <Card
-          title="Recent submissions"
-          subtitle="Newest bills from your field teams"
-          actions={<Link to="/invoices" className="btn sm ghost">All invoices <ArrowRight size={14} /></Link>}
-        >
-          {invoices.length === 0 ? (
-            <Empty icon={<Receipt size={24} />} title="No invoices yet" message="Bills scanned in the employee apps will appear here." />
-          ) : (
-            <div className="table-wrap">
-              <table className="table">
-                <tbody>
-                  {invoices.slice(0, 6).map((inv) => (
-                    <tr key={inv.id} className="clickable" onClick={() => navigate(`/invoices/${inv.id}`)}>
-                      <td>
-                        <div className="row">
-                          <InvoiceThumb invoice={inv} />
-                          <div>
-                            <div className="cell-title">{inv.vendorName || inv.editedData?.vendorName || 'Unknown vendor'}</div>
-                            <div className="cell-sub mono">{inv.invoiceNumber || 'No invoice number'}</div>
+        <div className="grid cols-3">
+          <Card
+            title="Recent submissions"
+            subtitle="Newest bills from your field teams"
+            className="span-2"
+            actions={<Link to="/invoices" className="btn sm ghost">All invoices <ArrowRight size={14} /></Link>}
+          >
+            {invoices.length === 0 ? (
+              <Empty icon={<Receipt size={24} />} title="No invoices yet" message="Bills scanned in the employee apps will appear here." />
+            ) : (
+              <div className="table-wrap">
+                <table className="table">
+                  <tbody>
+                    {invoices.map((inv) => (
+                      <tr
+                        key={inv.id}
+                        className="clickable"
+                        tabIndex={0}
+                        onClick={() => navigate(`/invoices/${inv.id}`)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) navigate(`/invoices/${inv.id}`) }}
+                      >
+                        <td>
+                          <div className="row">
+                            <InvoiceThumb invoice={inv} />
+                            <div>
+                              <div className="cell-title">{vendorOf(inv)}</div>
+                              <div className="cell-sub">{inv.employeeName ?? inv.invoiceNumber ?? 'No invoice number'}</div>
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                      <td className="nowrap">{money(inv.netAmount)}</td>
-                      <td><Badge status={inv.approvalStatus} /></td>
-                      <td className="right faint nowrap">{relative(inv.uploadedAt)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
+                        </td>
+                        <td className="nowrap">{money(inv.netAmount)}</td>
+                        <td><Badge status={inv.approvalStatus} /></td>
+                        <td className="right faint nowrap">{relative(inv.uploadedAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+          <div className="stack">
+            {seats && (
+              <Card title="Employee seats" actions={<Link to="/employees" className="btn sm ghost"><Users size={14} /> Manage</Link>}>
+                <div className="stat-value" style={{ marginTop: 0 }}>
+                  {seats.used}<span className="faint" style={{ fontSize: 16, fontWeight: 500 }}> of {seats.limit ?? '∞'} used</span>
+                </div>
+                {seatShare !== null && <div className={`progress ${seatShare >= 90 ? 'warn' : ''}`}><span style={{ width: `${seatShare}%` }} /></div>}
+                {seatShare !== null && seatShare >= 90 && (
+                  <div className="faint" style={{ fontSize: 12.5, marginTop: 8 }}>Running out of seats. <Link to="/billing">Add seats</Link></div>
+                )}
+              </Card>
+            )}
+            <Card title="Top categories" subtitle="By amount">
+              {topCategories.length === 0 ? <Empty icon={<PieChart size={22} />} title="No categorised bills yet" /> : (
+                topCategories.map((c) => (
+                  <div key={c.name} className="list-item" style={{ padding: '10px 0' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="cell-title">{c.name}</div>
+                      <div className="cell-sub">{c.count} bill{c.count === 1 ? '' : 's'}</div>
+                    </div>
+                    <div className="cell-title nowrap">{money(c.amount, true)}</div>
+                  </div>
+                ))
+              )}
+            </Card>
+          </div>
+        </div>
         {stats.rejectedCount > 0 && (
-          <div className="faint row" style={{ fontSize: 12.5 }}><XCircle size={14} /> {stats.rejectedCount} rejected bills are kept for audit.</div>
+          <Link to="/invoices?status=rejected" className="faint row" style={{ fontSize: 12.5 }}><XCircle size={14} /> {stats.rejectedCount} rejected bills are kept for audit.</Link>
         )}
       </div>
     </>

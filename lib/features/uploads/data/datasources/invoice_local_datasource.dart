@@ -10,6 +10,9 @@ class InvoiceLocalDataSource {
 
   final LocalDatabase _database;
 
+  /// Company id the open boxes belong to (`global` when signed out).
+  String get tenantId => _database.tenantSuffix;
+
   Future<void> save(InvoiceEntity invoice) async {
     try {
       await _database.invoices.put(invoice.localId, invoice.toJson());
@@ -29,6 +32,22 @@ class InvoiceLocalDataSource {
       throw AppException(
         CacheFailure('Failed to read invoice $localId: $error'),
       );
+    }
+  }
+
+  Future<InvoiceEntity?> getByServerId(String serverId) async {
+    final imported = await getById('srv_$serverId');
+    if (imported != null) return imported;
+    final all = await list();
+    return all.where((invoice) => invoice.serverId == serverId).firstOrNull;
+  }
+
+  Future<void> delete(String localId) async {
+    try {
+      await _database.invoices.delete(localId);
+      await _database.uploadQueue.delete(localId);
+    } catch (error) {
+      throw AppException(CacheFailure('Failed to delete invoice: $error'));
     }
   }
 
@@ -152,21 +171,39 @@ class InvoiceLocalDataSource {
     }
   }
 
+  /// Counts keys only, so polling it never decodes the queue.
   Future<int> pendingQueueCount() async {
-    final items = await listQueueItems();
-    return items.length;
+    try {
+      return _database.uploadQueue.length;
+    } catch (_) {
+      return 0;
+    }
   }
 
   Future<void> recoverStuckUploading() async {
     final uploading = await list(syncStatus: SyncStatus.uploading);
     for (final invoice in uploading) {
-      await save(
-        invoice.copyWith(
-          syncStatus: SyncStatus.pending,
-          lastUploadError: null,
-        ),
-      );
+      await save(invoice.copyWith(syncStatus: SyncStatus.pending));
     }
+  }
+
+  /// When `/invoices/mine` was last read in full or incrementally.
+  Future<DateTime?> lastStatusPullAt() async {
+    try {
+      final raw = _database.meta.get(_database.statusPullKey);
+      return raw is String ? DateTime.tryParse(raw) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> setLastStatusPullAt(DateTime at) async {
+    try {
+      await _database.meta.put(
+        _database.statusPullKey,
+        at.toUtc().toIso8601String(),
+      );
+    } catch (_) {}
   }
 
   bool _sameDay(DateTime a, DateTime b) {

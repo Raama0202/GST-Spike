@@ -75,6 +75,7 @@ Returns current employee profile (same shape as `employee` above).
   "duplicateCheckEnabled": true,
   "minOcrConfidenceWarn": 0.55,
   "features": { "galleryImport": true, "remarksRequired": false },
+  "gstinLiveCheck": true,
   "categories": [
     { "id": "cat1", "name": "Cement", "parentId": null, "sortOrder": 1 }
   ],
@@ -85,7 +86,61 @@ Returns current employee profile (same shape as `employee` above).
 }
 ```
 
+`gstinLiveCheck` is true when a GST portal provider is configured on the server.
+
+## GSTIN verification
+
+### GET `/gstin/{gstin}`
+
+Any signed-in user. Checks the GSTIN with the GST portal through the configured GSP
+(cached for 24 hours). Admins may pass `?refresh=true` to skip the cache.
+
+```json
+{
+  "gstin": "29AFSPB9500E1Z7",
+  "formatValid": true,
+  "status": "active",
+  "statusText": "Active",
+  "legalName": "Vicky Private Limited",
+  "tradeName": "Vicky Traders",
+  "registrationDate": "2019-10-18",
+  "cancellationDate": null,
+  "taxpayerType": "Regular",
+  "constitution": "Private Limited Company",
+  "address": "26, Whitefield Main Road, Bangalore, Bengaluru Urban, Karnataka - 560048",
+  "stateCode": "29",
+  "stateName": "Karnataka",
+  "einvoiceEnabled": false,
+  "liveCheck": true,
+  "source": "sandbox",
+  "checkedAt": "2026-11-01T10:00:00Z",
+  "message": "Active on the GST portal"
+}
+```
+
+`status` is one of `active`, `cancelled`, `suspended`, `inactive`, `not_found`,
+`invalid_format` or `unverified` (no provider configured, or the provider failed; `liveCheck`
+is then false and `error` may be present).
+
+### POST `/public/gstin/check`
+
+No sign-in; 10 requests per hour per IP. Body `{ "gstin": "..." }`. Returns only `gstin`,
+`formatValid`, `status`, `legalName`, `tradeName`, `stateName`, `liveCheck` and `message`.
+Used by the firm sign-up form.
+
+### GET `/gstin/status`
+
+`{ "liveCheck": true, "provider": "sandbox" }`
+
+Invoices carry `gstinCheck` (`status`, `legalName`, `tradeName`, `cancellationDate`,
+`message`, `checkedAt`) once the background check finishes; admins filter with `gstinStatus`
+(`problem` = cancelled, suspended, inactive, not found or invalid) and re-check with
+`POST /admin/invoices/{id}/verify-gstin`.
+
 ## Invoices
+
+`netAmount` is the **invoice value**: the full amount of the bill including GST. The JSON
+key keeps its original name so existing app versions and stored invoices stay compatible.
 
 ### POST `/invoices/duplicate-check`
 
@@ -198,6 +253,51 @@ Notification `type` enum: `billApproved`, `billRejected`, `billReturned`, `compa
 ```json
 { "deviceId": "...", "platform": "android", "appVersion": "1.0.0", "fcmToken": null }
 ```
+
+## Public (no auth)
+
+### GET `/public/business`
+
+Seller details for the pricing, contact and policy pages:
+`{ name, legalName, gstin, address, email, phone, taxPercent, paymentsEnabled, trialDays }`.
+`taxPercent` is 0 when the platform has no GSTIN.
+
+### GET `/public/plans`
+
+`{ items: [{ code, name, monthlyPriceInr, maxEmployees, features }], taxPercent }`. Paid plans only.
+
+## Subscription billing (company admin, web console)
+
+### GET `/admin/billing`
+
+`{ paymentsEnabled, keyId, taxPercent, liveMode, businessName, activeEmployees, subscription, plans, orders }`.
+`liveMode` is false while Razorpay test keys are configured. Each order has
+`invoiceNumber` (once paid) and `refundedAmount`; `status` is `created | authorized | paid | failed | refunded`.
+
+### POST `/admin/billing/orders` → 201
+
+Body `{ planCode, seats, months }`. Returns `{ id, orderId, keyId, amountPaise, currency, quote, companyName, prefillEmail, description }`
+for Razorpay Checkout (`orderId` is the Razorpay order ID, `id` the internal one).
+
+### POST `/admin/billing/verify`
+
+Body `{ razorpayOrderId, razorpayPaymentId, razorpaySignature }` from the Checkout handler.
+Verifies the signature, extends the subscription once and issues the invoice.
+
+### GET `/admin/billing/orders/{id}/invoice`
+
+GST invoice for a paid order (409 before payment, 404 for another company's order):
+`{ number, issuedAt, title, seller, buyer, placeOfSupply, reverseCharge, lines[{ description, sac, quantity, unit, rate, amount }],
+subtotal, taxPercent, cgst, sgst, igst, total, amountInWords, payment{ method, orderId, paymentId, paidAt }, refundedAmount }`.
+`title` is "Tax Invoice" when GST is charged, otherwise "Invoice". The super admin equivalent is
+`GET /super/payments/{id}/invoice`; `GET /super/payments` totals include `refundedInr` and `netInr`.
+
+### POST `/payments/razorpay/webhook`
+
+Razorpay → API, verified with `X-Razorpay-Signature`. Handles `payment.captured`, `order.paid`
+(credit, refused when the amount differs from the order), `payment.failed`, and
+`refund.processed` / `refund.created` / `payment.refunded` (records the refunded amount; full refunds set status `refunded`).
+Duplicate deliveries (same `X-Razorpay-Event-Id`) are ignored.
 
 ## Error shape
 

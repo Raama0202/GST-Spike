@@ -1,46 +1,28 @@
-# Full production blueprint (Render paid plans). Not auto-applied: in Render,
-# New -> Blueprint, then set "Blueprint Path" to render.full-stack.yaml.
+# Production blueprint on paid Render plans (always-on, auto-scaled), still on
+# MongoDB Atlas. Not auto-applied: in Render, New -> Blueprint, then set
+# "Blueprint Path" to render.full-stack.yaml. For the free setup use render.yaml.
 #
-# API (auto-scaled, gunicorn + uvicorn workers) + Postgres + Key Value (Redis)
-# + static admin console + nightly cleanup cron. Images live in Cloudflare R2.
+# Differences from render.yaml: the API never sleeps and scales 1 -> 3
+# instances, images go to Cloudflare R2 (10 GB free) instead of GridFS so the
+# Atlas cluster only holds data, and a nightly cron purges expired records.
 #
-# Connection budget: WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW) x maxInstances
-#   = 3 x (4 + 2) x 4 = 72  <  100 connections on basic-* Postgres plans.
-# Raise maxInstances only together with a bigger Postgres plan (or PgBouncer).
-#
-# Variables marked `sync: false` are prompted for in the Render dashboard on first deploy.
-# See backend/README.md "Production deploy checklist".
-
-databases:
-  - name: gst-expense-db
-    plan: basic-1gb
-    region: singapore
-    databaseName: gst_expenses
-    user: gst
-    postgresMajorVersion: "16"
-    ipAllowList: []          # private network only
+# Connection budget: WEB_CONCURRENCY x MONGODB_MAX_POOL_SIZE x maxInstances
+#   = 2 x 20 x 3 = 120  <  500 connections on Atlas M0/M2/M5 (1,500 on M10).
 
 services:
-  - type: keyvalue
-    name: gst-expense-cache
-    plan: starter
-    region: singapore
-    maxmemoryPolicy: volatile-lru   # every key we write has a TTL
-    ipAllowList: []
-
   - type: web
     name: gst-expense-scanner
     runtime: python
     rootDir: backend
-    plan: standard
+    plan: starter
     region: singapore
     buildCommand: pip install -r requirements.txt
-    preDeployCommand: alembic upgrade head && python -m app.seed
+    preDeployCommand: python -m app.cli init-db
     startCommand: gunicorn -c gunicorn.conf.py app.main:app
     healthCheckPath: /ready
     scaling:
-      minInstances: 2
-      maxInstances: 4
+      minInstances: 1
+      maxInstances: 3
       targetCPUPercent: 65
       targetMemoryPercent: 80
     envVars:
@@ -48,30 +30,22 @@ services:
         value: production
       - key: PYTHON_VERSION
         value: "3.12.7"
-      - key: DATABASE_URL
-        fromDatabase:
-          name: gst-expense-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: gst-expense-cache
-          property: connectionString
+      - key: MONGODB_URI
+        sync: false
+      - key: WEB_CONCURRENCY
+        value: "2"
+      - key: MONGODB_MAX_POOL_SIZE
+        value: "20"
       - key: JWT_SECRET
         generateValue: true
-      - key: WEB_CONCURRENCY
-        value: "3"
-      - key: DB_POOL_SIZE
-        value: "4"
-      - key: DB_MAX_OVERFLOW
-        value: "2"
       - key: LOG_JSON
         value: "true"
       - key: CORS_ORIGINS
         sync: false            # e.g. https://gst-admin-console.onrender.com,https://admin.yourdomain.com
       - key: PUBLIC_WEB_URL
         sync: false
-      # Cloudflare R2
+      - key: CACHE_BACKEND
+        value: mongo
       - key: STORAGE_BACKEND
         value: r2
       - key: R2_ACCOUNT_ID
@@ -82,9 +56,20 @@ services:
         sync: false
       - key: R2_BUCKET
         sync: false
-      # OTP SMS: msg91 | twilio (employee login returns 503 until configured)
-      - key: SMS_PROVIDER
+      - key: EMAIL_PROVIDER
+        value: brevo,resend
+      - key: BREVO_API_KEY
         sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: GST Expense
+      - key: EMPLOYEE_OTP_CHANNEL
+        value: auto
+      - key: SMS_PROVIDER
+        sync: false            # none | msg91 | twilio
       - key: MSG91_AUTH_KEY
         sync: false
       - key: MSG91_TEMPLATE_ID
@@ -95,7 +80,10 @@ services:
         sync: false
       - key: TWILIO_FROM_NUMBER
         sync: false
-      # Razorpay (billing returns 503 until all three are set)
+      - key: DEMO_OTP_MOBILES
+        sync: false
+      - key: DEMO_OTP_CODE
+        sync: false
       - key: RAZORPAY_KEY_ID
         sync: false
       - key: RAZORPAY_KEY_SECRET
@@ -104,23 +92,53 @@ services:
         sync: false
       - key: BILLING_TAX_PERCENT
         value: "18"
-      # Monitoring / AI
+      # Your business: printed on subscription tax invoices and the public policy pages.
+      - key: BUSINESS_NAME
+        value: GST Expense
+      - key: BUSINESS_LEGAL_NAME
+        sync: false
+      - key: BUSINESS_GSTIN
+        sync: false
+      - key: BUSINESS_ADDRESS
+        sync: false
+      - key: BUSINESS_EMAIL
+        sync: false
+      - key: BUSINESS_PHONE
+        sync: false
+      - key: BILLING_INVOICE_PREFIX
+        value: GSTX
+      - key: BILLING_SAC_CODE
+        value: "997331"
+      - key: RENEWAL_REMINDER_DAYS
+        value: "7,3,1"
       - key: SENTRY_DSN
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: GSTIN_VERIFY_PROVIDER
+        sync: false
+      - key: GSTIN_VERIFY_API_KEY
+        sync: false
+      - key: GSTIN_VERIFY_API_SECRET
+        sync: false
       - key: GEMINI_MODEL
         value: gemini-flash-latest
+      - key: FCM_SERVICE_ACCOUNT_JSON
+        sync: false
 
   - type: web
     name: gst-admin-console
     runtime: static
-    buildCommand: npm ci && npm --workspace @gst-suite/web run build
-    staticPublishPath: apps/web/dist
+    rootDir: web-admin
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
     pullRequestPreviewsEnabled: false
     envVars:
       - key: VITE_API_BASE_URL
         value: https://gst-expense-scanner.onrender.com/v1
+      # Optional: browser error reporting (Sentry project DSN, free tier).
+      - key: VITE_SENTRY_DSN
+        sync: false
     routes:
       - type: rewrite
         source: /*
@@ -133,7 +151,7 @@ services:
           script-src 'self' https://checkout.razorpay.com;
           style-src 'self' 'unsafe-inline';
           img-src 'self' data: blob: https://gst-expense-scanner.onrender.com https://*.r2.cloudflarestorage.com https://*.razorpay.com;
-          connect-src 'self' https://gst-expense-scanner.onrender.com https://*.r2.cloudflarestorage.com https://api.razorpay.com https://lumberjack.razorpay.com;
+          connect-src 'self' https://gst-expense-scanner.onrender.com https://*.r2.cloudflarestorage.com https://api.razorpay.com https://lumberjack.razorpay.com https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io;
           frame-src https://api.razorpay.com https://checkout.razorpay.com;
           font-src 'self' data:;
           frame-ancestors 'none';
@@ -176,7 +194,32 @@ services:
         value: production
       - key: PYTHON_VERSION
         value: "3.12.7"
-      - key: DATABASE_URL
-        fromDatabase:
-          name: gst-expense-db
-          property: connectionString
+      - key: MONGODB_URI
+        sync: false
+
+  - type: cron
+    name: gst-expense-backup
+    runtime: python
+    rootDir: backend
+    plan: starter
+    region: singapore
+    schedule: "0 21 * * *"      # 02:30 IST daily
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.cli backup
+    envVars:
+      - key: ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: MONGODB_URI
+        sync: false
+      - key: BACKUP_BUCKET
+        sync: false            # a separate bucket from R2_BUCKET is recommended
+      - key: BACKUP_KEEP_DAYS
+        value: "14"
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false

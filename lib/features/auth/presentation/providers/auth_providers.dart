@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:equatable/equatable.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:gst_expense_scanner/core/errors/failures.dart';
+import 'package:gst_expense_scanner/core/utils/result.dart';
 import 'package:gst_expense_scanner/features/auth/domain/repositories/auth_repository.dart';
 import 'package:gst_expense_scanner/features/company_config/domain/company_config_repository.dart';
 import 'package:gst_expense_scanner/features/company_config/presentation/company_config_providers.dart';
@@ -59,12 +62,19 @@ class AuthNotifier extends StateNotifier<AuthState> {
   CompanyConfigRepository get _companyConfigRepository =>
       _ref.read(companyConfigRepositoryProvider);
 
-  Future<void> sendOtp(String mobile) async {
+  /// Returns where the code was sent, or null (with [AuthErrorState]) on failure.
+  Future<OtpDelivery?> sendOtp(String mobile) async {
     state = const AuthAuthenticating();
     final result = await _repository.requestOtp(mobile);
-    result.fold(
-      onSuccess: (_) => state = const AuthUnauthenticated(),
-      onFailure: (error) => state = AuthErrorState(_messageFrom(error)),
+    return result.fold(
+      onSuccess: (delivery) {
+        state = const AuthUnauthenticated();
+        return delivery;
+      },
+      onFailure: (error) {
+        state = AuthErrorState(_messageFrom(error));
+        return null;
+      },
     );
   }
 
@@ -93,16 +103,46 @@ class AuthNotifier extends StateNotifier<AuthState> {
     );
   }
 
-  Future<void> restore() async {
+  /// Restores the cached session (no network), then validates the tokens in
+  /// the background. Returns true when signed in.
+  Future<bool> restore() async {
     state = const AuthAuthenticating();
     final result = await _repository.restoreSession();
-    result.fold(
+    return result.fold(
       onSuccess: (employee) {
         state = AuthAuthenticated(employee);
-        _fetchCompanyConfig();
+        unawaited(_validateInBackground());
+        return true;
       },
-      onFailure: (_) => state = const AuthUnauthenticated(),
+      onFailure: (error) {
+        state = error is AuthFailure && error.isAccountBlocked
+            ? AuthErrorState(error.message)
+            : const AuthUnauthenticated();
+        return false;
+      },
     );
+  }
+
+  Future<void> _validateInBackground() async {
+    final refreshed = await _repository.refreshSession();
+    if (refreshed case FailureResult(:final error)) {
+      if (error is AuthFailure && error.isAccountBlocked) {
+        await accountBlocked(error.code);
+      } else {
+        await sessionExpired();
+      }
+      return;
+    }
+    await _fetchCompanyConfig();
+  }
+
+  /// The company is suspended or its subscription lapsed. Tokens are dropped
+  /// but queued invoices are kept for when access is restored.
+  Future<void> accountBlocked(String? code) async {
+    if (state is! AuthAuthenticated) return;
+    state = AuthErrorState(AccountBlockCodes.messageFor(code));
+    _ref.read(companyConfigStateProvider.notifier).clear();
+    await _repository.clearLocalSession();
   }
 
   Future<void> logout() async {
@@ -117,10 +157,26 @@ class AuthNotifier extends StateNotifier<AuthState> {
     );
   }
 
+  /// The server rejected the refresh token. Tokens are already cleared by the
+  /// repository; queued invoices are kept so they upload after sign-in.
+  Future<void> sessionExpired() async {
+    if (state is! AuthAuthenticated) return;
+    _ref.read(companyConfigStateProvider.notifier).clear();
+    state = const AuthErrorState(
+      'Your session has expired. Please sign in again.',
+    );
+  }
+
   void clearError() {
     if (state is AuthErrorState) {
       state = const AuthUnauthenticated();
     }
+  }
+
+  /// Re-reads company settings (GPS rule, OCR threshold, categories).
+  Future<void> refreshCompanyConfig() async {
+    if (state is! AuthAuthenticated) return;
+    await _fetchCompanyConfig();
   }
 
   Future<void> _fetchCompanyConfig() async {

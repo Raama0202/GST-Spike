@@ -1,24 +1,141 @@
-# Web console (super admin + company admin) as a free Render static site.
+# Render blueprint: API (FastAPI on MongoDB Atlas) + web console (static site).
 #
-# Deliberately static-only so a push never creates paid resources. The API,
-# Postgres, Redis and cron live in render.full-stack.yaml.
+# In Render: New -> Blueprint -> pick this repo (Blueprint Path: render.yaml).
+# Variables marked `sync: false` are asked for on the first deploy; see
+# docs/GO_LIVE.md for where to get each one (all have free tiers).
 #
-# The console calls https://gst-expense-scanner.onrender.com/v1 (fallback in
-# web-admin/src/api/client.ts). That API's CORS_ORIGINS must include this
-# site's URL, e.g. https://gst-spike-web.onrender.com.
+# Everything here runs on Render's free plan. Free web services sleep after
+# 15 minutes without traffic and take ~1 minute to wake; switch the API to
+# `plan: starter` for always-on production use.
+#
+# The console calls the API at https://gst-expense-scanner.onrender.com/v1.
+# If Render gives the API a different URL (the name was taken, or you use a
+# custom domain), update VITE_API_BASE_URL and the two CSP host entries below,
+# and put the console URL in the API's CORS_ORIGINS.
 
 services:
   - type: web
-    name: gst-spike-web
-    runtime: static
+    name: gst-expense-scanner
+    runtime: python
+    rootDir: backend
     plan: free
     region: singapore
-    buildCommand: npm ci && npm --workspace @gst-suite/web run build
-    staticPublishPath: apps/web/dist
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -c gunicorn.conf.py app.main:app
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: LOG_JSON
+        value: "true"
+      # 512 MB on the free plan: two workers fit comfortably.
+      - key: WEB_CONCURRENCY
+        value: "2"
+      # Atlas: mongodb+srv://<user>:<password>@<cluster>.mongodb.net/gst_expenses?retryWrites=true&w=majority
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_MAX_POOL_SIZE
+        value: "20"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: https://gst-admin-console.onrender.com
+      - key: PUBLIC_WEB_URL
+        value: https://gst-admin-console.onrender.com
+      # Images in GridFS and rate limits in MongoDB: no extra services needed.
+      - key: STORAGE_BACKEND
+        value: gridfs
+      - key: CACHE_BACKEND
+        value: mongo
+      # Free email OTP (firm sign-up, password reset, employee login).
+      # Brevo is tried first, Resend is the fallback when its key is set.
+      - key: EMAIL_PROVIDER
+        value: brevo,resend
+      - key: BREVO_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: GST Expense
+      - key: EMPLOYEE_OTP_CHANNEL
+        value: auto
+      - key: ALLOW_SELF_SIGNUP
+        value: "true"
+      - key: SIGNUP_VERIFY_EMAIL
+        value: "true"
+      # Free key from https://aistudio.google.com/apikey (printed and handwritten bills).
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GSTIN_VERIFY_PROVIDER
+        sync: false
+      - key: GSTIN_VERIFY_API_KEY
+        sync: false
+      - key: GSTIN_VERIFY_API_SECRET
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-flash-latest
+      # Optional paid SMS OTP for employees without email: msg91 | twilio.
+      - key: SMS_PROVIDER
+        value: none
+      - key: MSG91_AUTH_KEY
+        sync: false
+      - key: MSG91_TEMPLATE_ID
+        sync: false
+      # Store-review login (e.g. Play Console): mobiles that accept DEMO_OTP_CODE.
+      - key: DEMO_OTP_MOBILES
+        sync: false
+      - key: DEMO_OTP_CODE
+        sync: false
+      # Optional: Razorpay (billing returns 503 until set) and Sentry.
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      # Your business: printed on subscription tax invoices and the public policy pages.
+      - key: BUSINESS_NAME
+        value: GST Expense
+      - key: BUSINESS_LEGAL_NAME
+        sync: false
+      - key: BUSINESS_GSTIN
+        sync: false
+      - key: BUSINESS_ADDRESS
+        sync: false
+      - key: BUSINESS_EMAIL
+        sync: false
+      - key: BUSINESS_PHONE
+        sync: false
+      - key: BILLING_INVOICE_PREFIX
+        value: GSTX
+      - key: BILLING_SAC_CODE
+        value: "997331"
+      - key: RENEWAL_REMINDER_DAYS
+        value: "7,3,1"
+      - key: SENTRY_DSN
+        sync: false
+      # Optional free push notifications: Firebase service-account JSON (raw or base64).
+      - key: FCM_SERVICE_ACCOUNT_JSON
+        sync: false
+
+  - type: web
+    name: gst-admin-console
+    runtime: static
+    rootDir: web-admin
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
     pullRequestPreviewsEnabled: false
     envVars:
       - key: VITE_API_BASE_URL
         value: https://gst-expense-scanner.onrender.com/v1
+      # Optional: browser error reporting (Sentry project DSN, free tier).
+      - key: VITE_SENTRY_DSN
+        sync: false
     routes:
       - type: rewrite
         source: /*
@@ -31,7 +148,7 @@ services:
           script-src 'self' https://checkout.razorpay.com;
           style-src 'self' 'unsafe-inline';
           img-src 'self' data: blob: https://gst-expense-scanner.onrender.com https://*.r2.cloudflarestorage.com https://*.razorpay.com;
-          connect-src 'self' https://gst-expense-scanner.onrender.com https://*.r2.cloudflarestorage.com https://api.razorpay.com https://lumberjack.razorpay.com;
+          connect-src 'self' https://gst-expense-scanner.onrender.com https://*.r2.cloudflarestorage.com https://api.razorpay.com https://lumberjack.razorpay.com https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io;
           frame-src https://api.razorpay.com https://checkout.razorpay.com;
           font-src 'self' data:;
           frame-ancestors 'none';

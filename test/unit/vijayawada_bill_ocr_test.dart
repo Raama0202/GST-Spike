@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gst_expense_scanner/features/ocr/data/gst_invoice_parser.dart';
+import 'package:gst_expense_scanner/shared/models/company_identity.dart';
 
 /// Realistic OCR dump from SRI VIJAYALAKSHMI ENTERPRISES tax invoice
 /// (WhatsApp test bill — fields circled 1–6 by QA).
@@ -46,5 +47,79 @@ void main() {
     expect(d.sgst, closeTo(4766.58, 0.01));
     expect(d.netAmount, closeTo(62495.00, 0.01));
     expect(result.confidence, greaterThan(0.7));
+  });
+
+  group('two companies on one bill', () {
+    final buyer = CompanyIdentity(
+      names: ['Surya Auto Builders'],
+      gstins: ['37ABPFS2501J2ZY'],
+    );
+
+    test('buyer printed first is skipped for the vendor', () {
+      const text = '''
+Bill To: M/s. SURYA AUTO BUILDERS
+GSTIN: 37ABPFS2501J2ZY
+TAX INVOICE
+SRI VIJAYALAKSHMI ENTERPRISES
+GSTIN : 37AARFS2045J1ZS
+Invoice No : G-25-26/11469
+Date : 13-11-2025
+NET AMOUNT : 62,495.00
+''';
+      final d = parser.parseRawText(text, identity: buyer).data;
+      expect(d.gstin, '37AARFS2045J1ZS');
+      expect(d.vendorName, contains('VIJAYALAKSHMI'));
+    });
+
+    test('company name in the header is skipped', () {
+      const text = '''
+SURYA AUTO BUILDERS PVT LTD
+SRI VIJAYALAKSHMI ENTERPRISES
+GSTIN 37AARFS2045J1ZS
+37ABPFS2501J2ZY
+Total : 1,180.00
+''';
+      final d = parser.parseRawText(text, identity: buyer).data;
+      expect(d.gstin, '37AARFS2045J1ZS');
+      expect(d.vendorName, isNot(contains('SURYA')));
+    });
+
+    test('without a profile the GSTIN outside the buyer block wins', () {
+      const text = '''
+Details of Receiver (Billed to)
+M/s. SURYA AUTO BUILDERS
+GSTIN: 37ABPFS2501J2ZY
+Details of Supplier
+SRI VIJAYALAKSHMI ENTERPRISES
+GSTIN : 37AARFS2045J1ZS
+HSN 320890 Qty 5
+''';
+      final d = parser.parseRawText(text).data;
+      expect(d.gstin, '37AARFS2045J1ZS');
+    });
+
+    test('only the company on the bill leaves the GSTIN empty', () {
+      const text = '''
+Cash Memo
+To: SURYA AUTO BUILDERS
+GSTIN 37ABPFS2501J2ZY
+Total 450
+''';
+      final d = parser.parseRawText(text, identity: buyer).data;
+      expect(d.gstin, isNull);
+    });
+  });
+
+  test('company identity matches names loosely and PAN across states', () {
+    final identity = CompanyIdentity(
+      names: ['Surya Auto Builders Private Limited'],
+      gstins: ['37ABPFS2501J2ZY'],
+    );
+    expect(identity.ownsName('M/s. SURYA AUTO BUILDERS'), isTrue);
+    expect(identity.ownsName('SURYA AUTO BUILDRS'), isTrue);
+    expect(identity.ownsName('SRI VIJAYALAKSHMI ENTERPRISES'), isFalse);
+    expect(identity.gstinMatch('37ABPFS2501J2ZY'), GstinMatch.exact);
+    expect(identity.gstinMatch('29ABPFS2501J1ZA'), GstinMatch.samePan);
+    expect(identity.gstinMatch('37AARFS2045J1ZS'), GstinMatch.none);
   });
 }

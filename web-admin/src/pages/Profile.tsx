@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { KeyRound, LogOut, Server, ShieldCheck, Smartphone } from 'lucide-react'
+import { KeyRound, LogOut, Monitor, ShieldCheck, Smartphone } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
-import { api, API_BASE_URL } from '../api/client'
+import { api } from '../api/client'
 import { initials } from '../lib/format'
+import { PASSWORD_HINT, passwordProblem } from '../lib/validation'
 import { Alert, Card, Field, PageHeader, Spinner, useToast } from '../components/ui'
 
 export default function Profile() {
@@ -14,21 +15,21 @@ export default function Profile() {
 
   return (
     <>
-      <PageHeader title="Profile" subtitle="Your account and connection details." />
+      <PageHeader title="Profile" subtitle="Your account and sign-in security." />
       <div className="grid cols-2">
         <Card>
           <div className="row" style={{ gap: 16 }}>
-            <div className="avatar" style={{ width: 64, height: 64, fontSize: 22 }}>{initials(session.email)}</div>
-            <div>
-              <div style={{ fontSize: 18, fontWeight: 700 }}>{session.email}</div>
+            <div className="avatar" style={{ width: 64, height: 64, fontSize: 22 }} aria-hidden>{initials(session.email)}</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 18, fontWeight: 700, wordBreak: 'break-all' }}>{session.email}</div>
               <div className="row" style={{ marginTop: 6 }}>
                 <span className={`badge ${isSuper ? 'violet' : 'blue'}`}>{isSuper ? 'Super admin' : 'Company admin'}</span>
               </div>
             </div>
           </div>
           <dl className="kv" style={{ marginTop: 22 }}>
-            <dt>Role</dt><dd>{isSuper ? 'Platform-wide access to tenants and plans' : 'Manages one company workspace'}</dd>
-            {session.companyId && <><dt>Company ID</dt><dd className="mono">{session.companyId}</dd></>}
+            <dt>Access</dt><dd>{isSuper ? 'Platform-wide access to tenants, plans and payments' : 'Manages one company workspace'}</dd>
+            {!isSuper && session.companyName && <><dt>Company</dt><dd>{session.companyName}</dd></>}
           </dl>
           <button
             className="btn danger"
@@ -38,18 +39,18 @@ export default function Profile() {
             <LogOut size={16} /> Sign out
           </button>
         </Card>
-        <Card title="Connected apps" subtitle="All clients share this backend, so changes here apply everywhere.">
+        <Card title="Where this account works" subtitle="The same email and password sign you in everywhere.">
           <div className="list-item">
-            <div className="dot-icon"><Server size={16} /></div>
-            <div><div className="cell-title">API server</div><div className="cell-sub mono">{API_BASE_URL}</div></div>
-          </div>
-          <div className="list-item">
-            <div className="dot-icon"><Smartphone size={16} /></div>
-            <div><div className="cell-title">Employee apps</div><div className="cell-sub">Android and iOS scanners upload invoices for review</div></div>
+            <div className="dot-icon"><Monitor size={16} /></div>
+            <div><div className="cell-title">Web console</div><div className="cell-sub">This site, on any desktop or mobile browser</div></div>
           </div>
           <div className="list-item">
             <div className="dot-icon"><ShieldCheck size={16} /></div>
             <div><div className="cell-title">Admin apps</div><div className="cell-sub">Android and iOS admin apps use the same accounts as this console</div></div>
+          </div>
+          <div className="list-item">
+            <div className="dot-icon"><Smartphone size={16} /></div>
+            <div><div className="cell-title">Employee apps</div><div className="cell-sub">Employees sign in with their mobile number, not this account</div></div>
           </div>
         </Card>
         <ChangePassword />
@@ -67,8 +68,8 @@ function ChangePassword() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const strongEnough = next.length >= 10 && /[A-Za-z]/.test(next) && /[0-9\W]/.test(next)
-  const valid = current && strongEnough && next === confirm && next !== current
+  const weak = next ? passwordProblem(next) : null
+  const valid = current && next && !weak && next === confirm && next !== current
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -97,14 +98,15 @@ function ChangePassword() {
         <Field label="Current password">
           <input className="input" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
         </Field>
-        <Field label="New password" hint="10+ characters, letters and a number or symbol">
+        <Field label="New password" hint={PASSWORD_HINT}>
           <input className="input" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
         </Field>
         <Field label="Confirm new password">
           <input className="input" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
         </Field>
-        {next && !strongEnough && <div className="faint" style={{ fontSize: 12.5 }}>Use at least 10 characters with letters and a number or symbol.</div>}
-        {confirm && next !== confirm && <div className="faint" style={{ fontSize: 12.5, color: '#fca5a5' }}>Passwords don't match.</div>}
+        {weak && <div className="faint" style={{ fontSize: 12.5 }}>{weak}</div>}
+        {confirm && next !== confirm && <div style={{ fontSize: 12.5, color: '#fca5a5' }}>Passwords don't match.</div>}
+        {next && current && next === current && <div style={{ fontSize: 12.5, color: '#fca5a5' }}>Choose a password different from the current one.</div>}
         <button className="btn primary" type="submit" disabled={!valid || busy} style={{ alignSelf: 'flex-start' }}>
           {busy ? <Spinner small /> : <KeyRound size={16} />} Update password
         </button>

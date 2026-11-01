@@ -70,7 +70,19 @@ class ExceptionMapper {
                 ? '$extracted (ref $requestId)'
                 : extracted);
         if (status == 401 || status == 403) {
-          return AuthFailure(message, code: status?.toString());
+          final serverCode = data is Map ? data['code'] : null;
+          if (serverCode is String && AccountBlockCodes.contains(serverCode)) {
+            return AuthFailure(
+              AccountBlockCodes.messageFor(serverCode),
+              code: serverCode,
+              statusCode: status,
+            );
+          }
+          return AuthFailure(
+            message,
+            code: status?.toString(),
+            statusCode: status,
+          );
         }
         return ServerFailure(message, statusCode: status, code: status?.toString());
       case DioExceptionType.cancel:

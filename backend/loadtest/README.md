@@ -22,7 +22,7 @@ Open http://localhost:8089, then ramp up, for example 500 users with a spawn rat
 
 ## Targets on the default Render setup
 
-The default setup is 2–4 Standard instances, 3 workers each, and Postgres basic-1gb.
+The default setup is 2–4 Standard instances, 3 workers each, and a MongoDB Atlas M10 cluster.
 
 | Metric | Target |
 |---|---|
@@ -34,7 +34,7 @@ The default setup is 2–4 Standard instances, 3 workers each, and Postgres basi
 ## If targets are missed
 
 - Check the slowest endpoints in Locust's "Statistics" tab.
-- Look at Render metrics for CPU, memory, and Postgres connections.
+- Look at Render metrics for CPU and memory, and Atlas metrics for connections and operation latency.
 - If CPU is high, raise the instance count.
-- If Postgres connections are saturated, raise the database plan and `DB_POOL_SIZE` together.
+- If Atlas connections are saturated, raise the cluster tier or lower `MONGODB_MAX_POOL_SIZE` × workers × instances.
   - Keep instances × `WEB_CONCURRENCY` × (pool + overflow) under the database connection limit.

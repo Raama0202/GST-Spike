@@ -1,7 +1,12 @@
+import 'dart:async';
+import 'dart:ui' show AppLifecycleState;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:gst_expense_scanner/core/errors/failures.dart';
 import 'package:gst_expense_scanner/core/network/api_client.dart';
 import 'package:gst_expense_scanner/core/security/secure_storage_service.dart';
+import 'package:gst_expense_scanner/core/services/location_service.dart';
 import 'package:gst_expense_scanner/core/storage/local_database.dart';
 import 'package:gst_expense_scanner/features/auth/data/datasources/auth_local_datasource.dart';
 import 'package:gst_expense_scanner/features/auth/data/datasources/auth_remote_datasource.dart';
@@ -23,6 +28,8 @@ import 'package:gst_expense_scanner/features/uploads/data/datasources/invoice_lo
 import 'package:gst_expense_scanner/features/uploads/data/datasources/invoice_remote_datasource.dart';
 import 'package:gst_expense_scanner/features/uploads/data/repositories/invoice_repository_impl.dart';
 import 'package:gst_expense_scanner/features/uploads/domain/repositories/invoice_repository.dart';
+import 'package:gst_expense_scanner/features/sync/presentation/sync_providers.dart'
+    show syncStatusProvider;
 
 // ── Core storage ─────────────────────────────────────────────────────────────
 
@@ -52,15 +59,34 @@ final authApiClientProvider = Provider<ApiClient>((ref) {
   );
 });
 
-final apiClientProvider = Provider<ApiClient>((ref) {
+final Provider<ApiClient> apiClientProvider = Provider<ApiClient>((ref) {
   return ApiClient(
     secureStorage: ref.watch(secureStorageProvider),
+    onAccountBlocked: (code) {
+      scheduleMicrotask(() {
+        ref.read(syncStatusProvider.notifier).stopEngine();
+        unawaited(
+          ref.read(auth.authStateProvider.notifier).accountBlocked(code),
+        );
+      });
+    },
     onRefreshToken: () async {
       final result =
           await ref.read(authRepositoryImplProvider).refreshSession();
       return result.fold(
         onSuccess: (refreshed) => refreshed,
-        onFailure: (_) => false,
+        onFailure: (error) {
+          scheduleMicrotask(() {
+            ref.read(syncStatusProvider.notifier).stopEngine();
+            final notifier = ref.read(auth.authStateProvider.notifier);
+            unawaited(
+              error is AuthFailure && error.isAccountBlocked
+                  ? notifier.accountBlocked(error.code)
+                  : notifier.sessionExpired(),
+            );
+          });
+          return false;
+        },
       );
     },
   );
@@ -84,6 +110,7 @@ final authRepositoryImplProvider = Provider<AuthRepository>((ref) {
     remote: ref.watch(authRemoteDataSourceProvider),
     local: ref.watch(authLocalDataSourceProvider),
     database: ref.watch(localDatabaseProvider),
+    imageStore: ref.watch(imageStoreProvider),
   );
 });
 
@@ -124,8 +151,18 @@ final invoiceRepositoryProvider = Provider<InvoiceRepository>((ref) {
   return InvoiceRepositoryImpl(
     localDataSource: ref.watch(invoiceLocalDataSourceProvider),
     remoteDataSource: ref.watch(invoiceRemoteDataSourceProvider),
+    imageStore: ref.watch(imageStoreProvider),
   );
 });
+
+final locationServiceProvider = Provider<LocationService>(
+  (ref) => LocationService(),
+);
+
+/// Updated by the app shell; polling pauses while the app is backgrounded.
+final appLifecycleProvider = StateProvider<AppLifecycleState>(
+  (ref) => AppLifecycleState.resumed,
+);
 
 // ── Scanner / OCR ────────────────────────────────────────────────────────────
 

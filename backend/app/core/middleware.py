@@ -8,7 +8,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import settings
 from app.core.logging import request_id_var
-from app.core.ratelimit import allow
+from app.core.ratelimit import allow, resolve_client_ip
 
 logger = logging.getLogger("app.request")
 
@@ -68,7 +68,7 @@ class RequestContextMiddleware:
                 return
 
             if not path.startswith(UNLIMITED_PATHS) and scope.get("method") != "OPTIONS":
-                ip = headers.get("x-forwarded-for", "").split(",")[0].strip() or (scope.get("client") or ("unknown",))[0]
+                ip = resolve_client_ip(headers.get("x-forwarded-for"), (scope.get("client") or (None,))[0])
                 if not await allow(f"ip:{ip}", ip_limit, 60):
                     await self._json(send_with_headers, 429, {"message": "Too many requests. Please slow down."}, retry_after=60)
                     return

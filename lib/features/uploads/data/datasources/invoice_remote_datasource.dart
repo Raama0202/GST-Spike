@@ -16,7 +16,69 @@ class InvoiceRemoteDataSource {
 
   final ApiClient _apiClient;
 
-  Future<DuplicateCheckResult> checkDuplicate(InvoiceFieldData data) async {
+  /// One page of the employee's invoices, most recently updated first
+  /// (`GET /invoices/mine`). [updatedSince] limits it to changes.
+  Future<({List<Map<String, dynamic>> items, int total})> fetchMinePage({
+    int page = 1,
+    int pageSize = 100,
+    DateTime? updatedSince,
+  }) async {
+    final response = await _apiClient.get<dynamic>(
+      ApiEndpoints.myInvoices,
+      queryParameters: {
+        'page': page,
+        'pageSize': pageSize,
+        if (updatedSince != null)
+          'updatedSince': updatedSince.toUtc().toIso8601String(),
+      },
+    );
+    final body = response.data;
+    final items = body is Map ? body['items'] : body;
+    final list = [
+      if (items is List)
+        for (final item in items)
+          if (item is Map) Map<String, dynamic>.from(item),
+    ];
+    final total = body is Map ? body['total'] : null;
+    return (items: list, total: total is int ? total : list.length);
+  }
+
+  /// `GET /invoices/{id}`: summary plus `categoryId` and `history`.
+  Future<Map<String, dynamic>> fetchInvoice(String serverId) async {
+    final response = await _apiClient.get<dynamic>(
+      ApiEndpoints.invoiceById(serverId),
+    );
+    return _asMap(response.data);
+  }
+
+  /// `POST /invoices/{id}/resubmit` for a returned invoice; returns the
+  /// updated summary.
+  Future<Map<String, dynamic>> resubmit({
+    required String serverId,
+    required InvoiceFieldData editedData,
+    String? categoryId,
+    String? note,
+  }) async {
+    final response = await _apiClient.post<dynamic>(
+      ApiEndpoints.invoiceResubmit(serverId),
+      data: {
+        'editedData': editedData.toJson(),
+        'categoryId': _uuidOrNull(categoryId),
+        if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+      },
+    );
+    return _asMap(response.data);
+  }
+
+  Map<String, dynamic> _asMap(Object? data) {
+    if (data is Map) return Map<String, dynamic>.from(data);
+    throw AppException(const ServerFailure('Unexpected invoice response.'));
+  }
+
+  Future<DuplicateCheckResult> checkDuplicate(
+    InvoiceFieldData data, {
+    Duration? timeout,
+  }) async {
     try {
       final response = await _apiClient.post<Map<String, dynamic>>(
         ApiEndpoints.invoiceDuplicateCheck,
@@ -26,6 +88,9 @@ class InvoiceRemoteDataSource {
           'invoiceDate': data.invoiceDate?.toIso8601String().substring(0, 10),
           'netAmount': data.netAmount,
         },
+        options: timeout == null
+            ? null
+            : Options(sendTimeout: timeout, receiveTimeout: timeout),
       );
 
       final body = response.data ?? const {};
@@ -118,20 +183,6 @@ class InvoiceRemoteDataSource {
         ServerFailure('Invoice upload failed: $error'),
       );
     }
-  }
-
-  /// Server-side state of this employee's invoices (admin decisions).
-  Future<List<Map<String, dynamic>>> fetchMine({int pageSize = 100}) async {
-    final response = await _apiClient.get<Map<String, dynamic>>(
-      ApiEndpoints.myInvoices,
-      queryParameters: {'page': 1, 'pageSize': pageSize},
-    );
-    final items = response.data?['items'];
-    if (items is! List) return const [];
-    return items
-        .whereType<Map>()
-        .map((item) => Map<String, dynamic>.from(item))
-        .toList();
   }
 
   Future<String> _resolveImage(

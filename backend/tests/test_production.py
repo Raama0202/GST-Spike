@@ -2,54 +2,30 @@
 import hashlib
 import hmac
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
 
+import factories as f
 from app.core.config import Settings, settings
-from app.core.security import hash_password
 from app.main import app
-from app.models import (
-    Branch,
-    Company,
-    CompanyStatus,
-    Employee,
-    PaymentOrder,
-    PaymentStatus,
-    Role,
-    Subscription,
-    SubscriptionPlan,
-    SubscriptionStatus,
-    User,
-)
+from app.models import PaymentStatus, Role
 
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
 
 
-async def seed(session_factory, *, expired: bool = False, employees: int = 1):
-    async with session_factory() as db:
-        db.add(SubscriptionPlan(code="starter", name="Starter", monthly_price_inr=999, max_employees=50))
-        db.add(SubscriptionPlan(code="growth", name="Growth", monthly_price_inr=2999, max_employees=200))
-        company = Company(name="Prod Co", activation_code="PROD", status=CompanyStatus.active)
-        db.add(company)
-        await db.flush()
-        branch = Branch(company_id=company.id, name="HQ", code="HQ")
-        admin = User(company_id=company.id, role=Role.company_admin, email="admin@prod.co", password_hash=hash_password("Password!123"))
-        superuser = User(role=Role.super_admin, email="root@prod.co", password_hash=hash_password("RootPassword!1"))
-        db.add_all([branch, admin, superuser])
-        await db.flush()
-        for i in range(employees):
-            user = User(company_id=company.id, role=Role.employee)
-            db.add(user)
-            await db.flush()
-            db.add(Employee(company_id=company.id, user_id=user.id, branch_id=branch.id, name=f"Emp {i:03d}", employee_code=f"E{i:03d}", mobile=f"98765{i:05d}"))
-        now = datetime.now(timezone.utc)
-        ends = now - timedelta(days=1) if expired else now + timedelta(days=30)
-        db.add(Subscription(company_id=company.id, plan_code="starter", seats=50, starts_at=now - timedelta(days=60), ends_at=ends, status=SubscriptionStatus.active))
-        await db.commit()
-        return company.id
+async def seed(db, *, expired: bool = False, employees: int = 1):
+    await f.plan(db, "starter", "Starter", 999, 50)
+    await f.plan(db, "growth", "Growth", 2999, 200)
+    company = await f.company(db, "Prod Co", activation_code="PROD")
+    branch = await f.branch(db, company["_id"])
+    await f.user(db, company["_id"], Role.company_admin, email="admin@prod.co", password="Password!123")
+    await f.user(db, None, Role.super_admin, email="root@prod.co", password="RootPassword!1")
+    for i in range(employees):
+        await f.employee(db, company["_id"], branch_id=branch["_id"], name=f"Emp {i:03d}", code=f"E{i:03d}", mobile=f"98765{i:05d}")
+    await f.subscription(db, company["_id"], "starter", 50, days=-1 if expired else 30, starts_days_ago=60)
+    return company["_id"]
 
 
 def client():
@@ -63,7 +39,7 @@ async def admin_headers(c, email="admin@prod.co", password="Password!123"):
 
 
 @pytest.mark.asyncio
-async def test_security_headers_and_request_id(db_engine):
+async def test_security_headers_and_request_id(mongo):
     async with client() as c:
         response = await c.get("/health", headers={"X-Request-Id": "abc123"})
     assert response.status_code == 200
@@ -73,7 +49,7 @@ async def test_security_headers_and_request_id(db_engine):
 
 
 @pytest.mark.asyncio
-async def test_ready_checks_database(db_engine):
+async def test_ready_checks_database(mongo):
     async with client() as c:
         response = await c.get("/ready")
     assert response.status_code in (200, 503)
@@ -81,12 +57,11 @@ async def test_ready_checks_database(db_engine):
 
 
 @pytest.mark.asyncio
-async def test_unhandled_error_is_json_with_cors(db_engine, monkeypatch):
-    _, session_factory, _ = db_engine
-    await seed(session_factory)
+async def test_unhandled_error_is_json_with_cors(mongo, monkeypatch):
+    await seed(mongo)
     import app.api.routes.admin as admin_routes
 
-    monkeypatch.setattr(admin_routes, "datetime", None)  # forces an AttributeError inside the handler
+    monkeypatch.setattr(admin_routes, "ist_today", None)  # forces a TypeError inside the handler
     async with client() as c:
         headers = await admin_headers(c)
         headers["Origin"] = settings.cors_origin_list[0]
@@ -99,7 +74,7 @@ async def test_unhandled_error_is_json_with_cors(db_engine, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_oversized_body_rejected(db_engine, monkeypatch):
+async def test_oversized_body_rejected(mongo, monkeypatch):
     monkeypatch.setattr(settings, "max_request_mb", 1)
     async with client() as c:
         response = await c.post(
@@ -111,9 +86,8 @@ async def test_oversized_body_rejected(db_engine, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_login_rate_limit_and_lockout(db_engine, monkeypatch):
-    _, session_factory, _ = db_engine
-    await seed(session_factory)
+async def test_login_rate_limit_and_lockout(mongo, monkeypatch):
+    await seed(mongo)
     monkeypatch.setattr(settings, "login_rate_per_minute", 100)
     monkeypatch.setattr(settings, "login_lockout_failures", 3)
     async with client() as c:
@@ -126,9 +100,8 @@ async def test_login_rate_limit_and_lockout(db_engine, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_change_password_revokes_old_refresh(db_engine):
-    _, session_factory, _ = db_engine
-    await seed(session_factory)
+async def test_change_password_revokes_old_refresh(mongo):
+    await seed(mongo)
     async with client() as c:
         login = await c.post("/v1/admin/auth/login", json={"email": "admin@prod.co", "password": "Password!123"})
         tokens = login.json()
@@ -144,9 +117,8 @@ async def test_change_password_revokes_old_refresh(db_engine):
 
 
 @pytest.mark.asyncio
-async def test_pagination_returns_totals(db_engine):
-    _, session_factory, _ = db_engine
-    await seed(session_factory, employees=25)
+async def test_pagination_returns_totals(mongo):
+    await seed(mongo, employees=25)
     async with client() as c:
         headers = await admin_headers(c)
         page = await c.get("/v1/admin/employees", headers=headers, params={"page": 2, "pageSize": 10})
@@ -158,9 +130,8 @@ async def test_pagination_returns_totals(db_engine):
 
 
 @pytest.mark.asyncio
-async def test_disabled_employee_loses_access_immediately(db_engine):
-    _, session_factory, _ = db_engine
-    await seed(session_factory)
+async def test_disabled_employee_loses_access_immediately(mongo):
+    await seed(mongo)
     async with client() as c:
         await c.post("/v1/auth/otp/request", json={"mobile": "9876500000"})
         auth = (await c.post("/v1/auth/otp/verify", json={"mobile": "9876500000", "otp": "123456"})).json()
@@ -172,9 +143,8 @@ async def test_disabled_employee_loses_access_immediately(db_engine):
 
 
 @pytest.mark.asyncio
-async def test_upload_rejects_non_images_and_serves_signed_media(db_engine):
-    _, session_factory, _ = db_engine
-    await seed(session_factory)
+async def test_upload_rejects_non_images_and_serves_signed_media(mongo):
+    await seed(mongo)
     async with client() as c:
         await c.post("/v1/auth/otp/request", json={"mobile": "9876500000"})
         auth = (await c.post("/v1/auth/otp/verify", json={"mobile": "9876500000", "otp": "123456"})).json()
@@ -198,9 +168,8 @@ async def test_upload_rejects_non_images_and_serves_signed_media(db_engine):
 
 
 @pytest.mark.asyncio
-async def test_announcement_bulk_insert_and_grouped_history(db_engine):
-    _, session_factory, _ = db_engine
-    await seed(session_factory, employees=30)
+async def test_announcement_bulk_insert_and_grouped_history(mongo):
+    await seed(mongo, employees=30)
     async with client() as c:
         headers = await admin_headers(c)
         sent = await c.post("/v1/admin/notifications/announcements", headers=headers, json={"title": "Deadline", "body": "Upload by 28th"})
@@ -211,9 +180,8 @@ async def test_announcement_bulk_insert_and_grouped_history(db_engine):
 
 
 @pytest.mark.asyncio
-async def test_billing_returns_503_until_configured(db_engine, monkeypatch):
-    _, session_factory, _ = db_engine
-    await seed(session_factory)
+async def test_billing_returns_503_until_configured(mongo, monkeypatch):
+    await seed(mongo)
     monkeypatch.setattr(settings, "razorpay_key_id", "")
     async with client() as c:
         headers = await admin_headers(c)
@@ -241,10 +209,10 @@ def _configure_razorpay(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_expired_company_can_pay_and_is_reactivated(db_engine, monkeypatch):
-    _, session_factory, _ = db_engine
-    company_id = await seed(session_factory, expired=True)
+async def test_expired_company_can_pay_and_is_reactivated(mongo, monkeypatch):
+    company_id = await seed(mongo, expired=True)
     _configure_razorpay(monkeypatch)
+    monkeypatch.setattr(settings, "business_gstin", "29ABCDE1234F1Z5")
     async with client() as c:
         login = await c.post("/v1/admin/auth/login", json={"email": "admin@prod.co", "password": "Password!123"})
         assert login.status_code == 200 and login.json()["billingRequired"] is True
@@ -276,19 +244,20 @@ async def test_expired_company_can_pay_and_is_reactivated(db_engine, monkeypatch
         payments = await c.get("/v1/super/payments", headers=root)
         assert payments.json()["total"] == 1 and payments.json()["items"][0]["companyName"] == "Prod Co"
 
-    async with session_factory() as db:
-        subscription = await db.scalar(select(Subscription).where(Subscription.company_id == company_id))
-        assert subscription.plan_code == "growth" and subscription.seats == 80
-        days = (subscription.ends_at.replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)).days
-        assert 88 <= days <= 90
-        order = await db.scalar(select(PaymentOrder))
-        assert order.status == PaymentStatus.paid
+    subscriptions = await mongo.subscriptions.find({"company_id": company_id}).to_list(None)
+    assert len(subscriptions) == 1
+    subscription = subscriptions[0]
+    assert subscription["plan_code"] == "growth" and subscription["seats"] == 80
+    days = (subscription["ends_at"] - datetime.now(timezone.utc)).days
+    assert 88 <= days <= 90
+    order = await mongo.payment_orders.find_one({})
+    assert order["status"] == PaymentStatus.paid.value
+    assert await mongo.payment_events.count_documents({}) == 1
 
 
 @pytest.mark.asyncio
-async def test_super_companies_paginated(db_engine):
-    _, session_factory, _ = db_engine
-    await seed(session_factory)
+async def test_super_companies_paginated(mongo):
+    await seed(mongo)
     async with client() as c:
         root = await admin_headers(c, "root@prod.co", "RootPassword!1")
         response = await c.get("/v1/super/companies", headers=root, params={"pageSize": 5})
@@ -308,43 +277,80 @@ def test_image_sniffing():
 
 
 def test_production_config_validation():
-    unsafe = Settings(env="production", jwt_secret="short", cors_origins="*", storage_backend="local", redis_url="", _env_file=None)
+    unsafe = Settings(
+        env="production", jwt_secret="short", cors_origins="*", storage_backend="local", cache_backend="memory",
+        redis_url="", mongodb_uri="mongodb://localhost:27017", _env_file=None,
+    )
     problems = unsafe.production_problems()
     assert any("JWT_SECRET" in p for p in problems)
     assert any("CORS_ORIGINS" in p for p in problems)
     assert any("STORAGE_BACKEND" in p for p in problems)
     assert any("REDIS_URL" in p for p in problems)
+    assert any("MONGODB_URI" in p for p in problems)
     assert unsafe.fixed_otp is None
     assert not unsafe.sms_configured
+    assert not unsafe.email_configured
 
+    atlas = "mongodb+srv://app:pw@cluster0.abcde.mongodb.net/gst_expenses?retryWrites=true&w=majority"
     safe = Settings(
         env="production",
         jwt_secret="x" * 48,
         cors_origins="https://admin.example.com",
+        mongodb_uri=atlas,
         storage_backend="r2",
         r2_account_id="acc",
         r2_access_key_id="k",
         r2_secret_access_key="s",
         r2_bucket="b",
-        redis_url="redis://localhost:6379/0",
         _env_file=None,
     )
     assert safe.production_problems() == []
     assert safe.r2_endpoint == "https://acc.r2.cloudflarestorage.com"
 
+    # The free Render + Atlas setup: images in GridFS, rate limits in Mongo, Brevo email OTP.
+    free = Settings(
+        env="production", jwt_secret="x" * 48, cors_origins="https://gst-admin.onrender.com", mongodb_uri=atlas,
+        email_provider="brevo", brevo_api_key="xkeysib-test", email_from="otp@example.com", _env_file=None,
+    )
+    assert free.production_problems() == []
+    assert free.email_configured and free.storage_backend == "gridfs" and free.cache_backend == "mongo"
+
 
 @pytest.mark.asyncio
-async def test_otp_returns_503_without_sms_provider(db_engine, monkeypatch):
-    _, session_factory, _ = db_engine
-    await seed(session_factory)
+async def test_otp_returns_503_without_sms_provider(mongo, monkeypatch):
+    await seed(mongo)
     monkeypatch.setattr(settings, "sms_provider", "msg91")
+    monkeypatch.setattr(settings, "email_provider", "brevo")
     async with client() as c:
         response = await c.post("/v1/auth/otp/request", json={"mobile": "9876500000"})
     assert response.status_code == 503
 
 
+@pytest.mark.asyncio
+async def test_email_only_otp_asks_admin_to_add_email(mongo, monkeypatch):
+    await seed(mongo)
+    monkeypatch.setattr(settings, "sms_provider", "msg91")
+    async with client() as c:
+        response = await c.post("/v1/auth/otp/request", json={"mobile": "9876500000"})
+    assert response.status_code == 400
+    assert "add your email" in response.json()["message"]
+
+
+def test_email_provider_fallback_chain():
+    chain = Settings(
+        env="production", email_provider="brevo, resend", resend_api_key="re_test", email_from="otp@example.com", _env_file=None,
+    )
+    assert chain.email_providers == ["resend"]
+    assert chain.email_configured
+    bad = Settings(env="production", email_provider="mailgun", _env_file=None)
+    assert any("EMAIL_PROVIDER" in problem for problem in bad.production_problems())
+
+
 def test_single_instance_and_demo_otp_config():
-    base = dict(env="production", jwt_secret="x" * 48, cors_origins="https://admin.example.com", storage_backend="local", redis_url="", _env_file=None)
+    base = dict(
+        env="production", jwt_secret="x" * 48, cors_origins="https://admin.example.com", storage_backend="local",
+        redis_url="", mongodb_uri="mongodb+srv://u:p@cluster0.abcde.mongodb.net/app", _env_file=None,
+    )
     single = Settings(allow_single_instance=True, **base)
     assert single.production_problems() == []
     assert any("redeploy" in w for w in single.production_warnings())
@@ -359,9 +365,8 @@ def test_single_instance_and_demo_otp_config():
 
 
 @pytest.mark.asyncio
-async def test_demo_otp_mobile_logs_in_without_sms(db_engine, monkeypatch):
-    _, session_factory, _ = db_engine
-    await seed(session_factory, employees=2)
+async def test_demo_otp_mobile_logs_in_without_sms(mongo, monkeypatch):
+    await seed(mongo, employees=2)
     monkeypatch.setattr(settings, "env", "production")
     monkeypatch.setattr(settings, "sms_provider", "msg91")
     monkeypatch.setattr(settings, "demo_otp_mobiles", "9876500000")
@@ -402,9 +407,8 @@ async def test_r2_storage_roundtrip(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rotated_refresh_token_cannot_be_replayed_same_second(db_engine):
-    _, session_factory, _ = db_engine
-    await seed(session_factory)
+async def test_rotated_refresh_token_cannot_be_replayed_same_second(mongo):
+    await seed(mongo)
     async with client() as c:
         login = (await c.post("/v1/admin/auth/login", json={"email": "admin@prod.co", "password": "Password!123"})).json()
         first = await c.post("/v1/auth/token/refresh", json={"refreshToken": login["refreshToken"]})
@@ -417,9 +421,8 @@ async def test_rotated_refresh_token_cannot_be_replayed_same_second(db_engine):
 
 
 @pytest.mark.asyncio
-async def test_employee_validation_conflicts_and_seat_limit(db_engine):
-    _, session_factory, _ = db_engine
-    await seed(session_factory, employees=50)
+async def test_employee_validation_conflicts_and_seat_limit(mongo):
+    await seed(mongo, employees=50)
     async with client() as c:
         h = await admin_headers(c)
         listed = (await c.get("/v1/admin/employees", headers=h)).json()["items"]
@@ -446,9 +449,8 @@ async def test_employee_validation_conflicts_and_seat_limit(db_engine):
 
 
 @pytest.mark.asyncio
-async def test_settings_and_catalog_bad_input_are_not_500(db_engine):
-    _, session_factory, _ = db_engine
-    await seed(session_factory)
+async def test_settings_and_catalog_bad_input_are_not_500(mongo):
+    await seed(mongo)
     async with client() as c:
         h = await admin_headers(c)
         r = await c.patch("/v1/admin/company/settings", headers=h, json={"name": None, "requiresGps": True})

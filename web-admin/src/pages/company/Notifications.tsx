@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Bell, Check, CornerUpLeft, Megaphone, X } from 'lucide-react'
 import { api } from '../../api/client'
 import type { NotificationItem, Page } from '../../api/types'
-import { Card, Empty, ErrorState, Loading, PageHeader, Pagination, useAsync } from '../../components/ui'
+import { Card, Empty, ErrorState, Loading, PageHeader, Pagination, useAsync, usePaged } from '../../components/ui'
 import { relative } from '../../lib/format'
 
 const PAGE_SIZE = 50
@@ -17,7 +17,7 @@ const TYPES: Record<string, { label: string; icon: typeof Bell; color: string }>
 
 export default function Notifications() {
   const [type, setType] = useState('all')
-  const [page, setPage] = useState(1)
+  const [page, setPage] = usePaged(type)
   const { data, error, loading, reload } = useAsync(
     () => api<Page<NotificationItem>>('/admin/notifications', {
       query: {
@@ -30,16 +30,19 @@ export default function Notifications() {
     [type, page],
   )
 
-  useEffect(() => setPage(1), [type])
   const list = data?.items ?? []
 
   return (
     <>
-      <PageHeader title="Activity" subtitle="Decisions sent to employees' notification inboxes in the mobile apps." />
+      <PageHeader
+        title="Notifications sent"
+        subtitle="Decisions sent to employees' notification inboxes in the mobile apps."
+        actions={<Link to="/activity" className="btn sm ghost">Full activity log →</Link>}
+      />
       <Card>
-        <div className="segmented" style={{ marginBottom: 16 }}>
+        <div className="segmented" role="group" aria-label="Type" style={{ marginBottom: 16 }}>
           {[['all', 'All'], ['billApproved', 'Approved'], ['billReturned', 'Returned'], ['billRejected', 'Rejected']].map(([k, label]) => (
-            <button key={k} className={type === k ? 'on' : ''} onClick={() => setType(k)}>{label}</button>
+            <button key={k} className={type === k ? 'on' : ''} aria-pressed={type === k} onClick={() => setType(k)}>{label}</button>
           ))}
         </div>
         {loading && !data ? <Loading /> : error ? <ErrorState message={error} onRetry={reload} /> : list.length === 0 ? (

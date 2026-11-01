@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'constants.dart';
 import 'server_config.dart';
+import 'session.dart';
 import 'storage.dart';
 
 final secureStoreProvider = Provider(
@@ -31,9 +32,19 @@ final dioProvider = Provider<Dio>((ref) {
   );
   Future<String?>? refreshing;
 
+  Future<void> expireSession() async {
+    await store.clear();
+    ref.read(sessionExpiryProvider.notifier).expire();
+  }
+
+  /// New access token, or null. Only a definitive rejection of the refresh
+  /// token signs the admin out; network failures keep the session.
   Future<String?> refresh() async {
     final refreshToken = await store.refreshToken;
-    if (refreshToken == null || refreshToken.isEmpty) return null;
+    if (refreshToken == null || refreshToken.isEmpty) {
+      await expireSession();
+      return null;
+    }
     try {
       final response = await Dio(
         BaseOptions(
@@ -47,6 +58,10 @@ final dioProvider = Provider<Dio>((ref) {
       if (token == null || token.isEmpty) return null;
       await store.saveTokens(token, data['refreshToken']?.toString());
       return token;
+    } on DioException catch (error) {
+      final status = error.response?.statusCode;
+      if (status == 401 || status == 403) await expireSession();
+      return null;
     } catch (_) {
       return null;
     }
@@ -63,14 +78,27 @@ final dioProvider = Provider<Dio>((ref) {
       },
       onError: (error, handler) async {
         final options = error.requestOptions;
+        final block = accountBlockOf(error);
+        if (block != null) {
+          ref.read(accountBlockProvider.notifier).block(block);
+          return handler.next(error);
+        }
         if (error.response?.statusCode != 401 ||
-            options.path == ApiPaths.login ||
+            ApiPaths.noRefresh.contains(options.path) ||
             options.extra['retried'] == true) {
           return handler.next(error);
         }
-        // Concurrent 401s share one refresh call.
-        refreshing ??= refresh().whenComplete(() => refreshing = null);
-        final token = await refreshing;
+        // A parallel request may already have rotated the token.
+        final current = await store.token;
+        final String? token;
+        if (current != null &&
+            options.headers['Authorization'] != 'Bearer $current') {
+          token = current;
+        } else {
+          // Concurrent 401s share one refresh call.
+          refreshing ??= refresh().whenComplete(() => refreshing = null);
+          token = await refreshing;
+        }
         if (token == null) return handler.next(error);
         options.headers['Authorization'] = 'Bearer $token';
         options.extra['retried'] = true;
@@ -140,7 +168,7 @@ List<Map<String, dynamic>> itemList(dynamic data) {
 
 /// Server-side total for paginated responses, falling back to the page length.
 int itemTotal(dynamic data) {
-  if (data is Map && data['total'] is num)
-    return (data['total'] as num).toInt();
+  final total = data is Map ? data['total'] : null;
+  if (total is num) return total.toInt();
   return itemList(data).length;
 }

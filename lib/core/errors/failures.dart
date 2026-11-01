@@ -27,7 +27,33 @@ class ServerFailure extends AppFailure {
 }
 
 class AuthFailure extends AppFailure {
-  const AuthFailure(super.message, {super.code});
+  const AuthFailure(super.message, {super.code, this.statusCode});
+
+  final int? statusCode;
+
+  /// The whole company is blocked (suspended / subscription lapsed), as
+  /// opposed to this user's session being invalid.
+  bool get isAccountBlocked => AccountBlockCodes.contains(code);
+
+  @override
+  List<Object?> get props => [...super.props, statusCode];
+}
+
+/// Machine codes the API attaches to 403s when the company is blocked.
+abstract final class AccountBlockCodes {
+  static const suspended = 'COMPANY_SUSPENDED';
+  static const subscriptionExpired = 'SUBSCRIPTION_EXPIRED';
+
+  static bool contains(String? code) =>
+      code == suspended || code == subscriptionExpired;
+
+  static String messageFor(String? code) => switch (code) {
+        suspended => 'Your company account is suspended. Please contact '
+            'your administrator or support.',
+        subscriptionExpired => "Your company's subscription has expired. "
+            'Ask your administrator to renew it, then sign in again.',
+        _ => 'Your company account is not active.',
+      };
 }
 
 class ValidationFailure extends AppFailure {

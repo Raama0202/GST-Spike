@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import zipfile
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -44,11 +45,27 @@ def _parse_csv(content: bytes) -> list[dict[str, Any]]:
     return _rows_from_table(rows)
 
 
+MAX_XLSX_UNCOMPRESSED = 300 * 1024 * 1024
+MAX_XLSX_RATIO = 200
+
+
+def _check_zip_bomb(content: bytes) -> None:
+    """xlsx is a zip; a small upload can expand to gigabytes and exhaust memory."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            total = sum(info.file_size for info in archive.infolist())
+    except zipfile.BadZipFile as exc:
+        raise ValueError("The file is not a valid .xlsx workbook. Save it as .xlsx or .csv and retry.") from exc
+    if total > MAX_XLSX_UNCOMPRESSED or total > max(len(content), 1) * MAX_XLSX_RATIO:
+        raise ValueError("The workbook expands to an unusually large size; export the period as CSV instead.")
+
+
 def _parse_xlsx(content: bytes) -> list[dict[str, Any]]:
     try:
         from openpyxl import load_workbook
     except ImportError as exc:
         raise RuntimeError("openpyxl is required for Excel imports") from exc
+    _check_zip_bomb(content)
     wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     sheet = wb.active
     rows = [[cell if cell is not None else "" for cell in row] for row in sheet.iter_rows(values_only=True)]

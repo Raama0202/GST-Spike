@@ -115,7 +115,7 @@ struct GSTInvoiceParser {
 
     /// Takes the largest of the "total"-style labels, like the Android parser.
     private func extractNetAmount(_ text: String) -> Double? {
-        let labels = ["GRAND TOTAL", "NET AMOUNT", "TOTAL AMOUNT", "AMOUNT PAYABLE", "NET PAYABLE", "INVOICE TOTAL", "TOTAL"]
+        let labels = ["GRAND TOTAL", "INVOICE VALUE", "NET AMOUNT", "TOTAL AMOUNT", "AMOUNT PAYABLE", "NET PAYABLE", "INVOICE TOTAL", "TOTAL"]
         return labels.compactMap { labeledAmount(text, [$0]) }.max()
     }
 

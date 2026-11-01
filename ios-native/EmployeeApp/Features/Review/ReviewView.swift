@@ -182,7 +182,7 @@ struct ReviewView: View {
                 amountField("SGST", $sgst)
                 amountField("IGST", $igst)
             }
-            GlassTextField(title: "Net amount", text: $net, systemImage: "indianrupeesign", prompt: "0.00", keyboard: .decimalPad, highlight: ocr.netAmount == nil)
+            GlassTextField(title: "Invoice value", text: $net, systemImage: "indianrupeesign", prompt: "0.00", keyboard: .decimalPad, highlight: ocr.netAmount == nil)
             if let calculated = calculatedNet, Formatters.parseAmount(net).map({ abs($0 - calculated) > 1 }) ?? true {
                 Button {
                     net = Formatters.amountText(calculated)

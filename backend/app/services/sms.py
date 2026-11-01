@@ -63,7 +63,7 @@ async def _send_twilio(mobile: str, code: str) -> None:
             data={
                 "To": "+" + to_e164(mobile),
                 "From": settings.twilio_from_number,
-                "Body": f"{code} is your GST Expense Scanner login code. It expires in 5 minutes.",
+                "Body": f"{code} is your GST Expense Scanner login code. It expires in {settings.otp_ttl_minutes} minutes.",
             },
         )
     if response.status_code >= 400:
